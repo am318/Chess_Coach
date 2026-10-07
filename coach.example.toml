@@ -1,0 +1,61 @@
+# Copy this file to `coach.toml` and fill in your accounts.
+# `coach.toml` is gitignored so your handles/keys stay local.
+
+[accounts]
+# Your usernames on each site. Leave a list empty to skip that site.
+lichess = ["your_lichess_username"]
+chesscom = ["your_chesscom_username"]
+# Treat Lichess + Chess.com as the same player (one merged profile). Set false
+# to keep separate profiles per account.
+unified = true
+
+[startup]
+# When the web app starts, pull new games and analyse them in the background.
+auto_sync = true
+auto_analyze = true
+analyze_limit = 60      # max games analysed per launch (analysis is ~1 min/game)
+mine_puzzles = true
+# Keep re-analysing already-analysed games at a deeper budget in the background,
+# using spare compute (one Stockfish worker). Off by default.
+deep_pass = false
+
+[lichess]
+# Optional. A personal API token (https://lichess.org/account/oauth/token) lifts
+# rate limits and lets the sync pull more games per request. Read-only scope is
+# enough. Leave blank to use anonymous access.
+token = ""
+# Only games at these speeds are ingested.
+speeds = ["blitz", "rapid", "classical"]
+# ~33 s of Stockfish per game, and the profile decays over 90 days, so there is
+# little value in pulling a deep archive.
+max_games = 600
+
+[chesscom]
+# Chess.com's public API needs no auth. It serves games one month-archive at a time.
+speeds = ["blitz", "rapid", "daily"]
+max_games = 600
+
+[engine]
+# Path to a Stockfish binary for analysis (the coach, not the competition agent).
+# `brew install stockfish` puts it on PATH, so "stockfish" usually works.
+stockfish_path = "stockfish"
+# Base analysis strength. nodes is the primary budget; depth caps it.
+# ~300k nodes ≈ depth 18-22 with Stockfish 18 (a solid club-level review).
+analysis_nodes = 300000
+analysis_depth = 18
+multipv = 3
+# Parallel Stockfish workers (each uses ~1 core).
+workers = 3
+# Budget for the optional deep background pass (startup.deep_pass = true).
+deep_nodes = 2500000
+deep_depth = 28
+deep_multipv = 3
+
+[profile]
+# cp-loss thresholds (centipawns) for labelling a move.
+inaccuracy_cp = 50
+mistake_cp = 120
+blunder_cp = 250
+# A position counts as "quiet / no obvious move" when its forcing-ness score is
+# below this (0 = dead quiet, 1 = highly forcing).
+quiet_forcingness_max = 0.25

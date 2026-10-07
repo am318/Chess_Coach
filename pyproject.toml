@@ -1,0 +1,61 @@
+[project]
+name = "chess-coach"
+version = "0.1.0"
+description = "A from-scratch chess engine, and a personal coach that turns your own games into a daily training plan"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "am318" }]
+keywords = ["chess", "engine", "coaching", "stockfish", "spaced-repetition"]
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # Mirror the competition sandbox's preinstalled set so local == sandbox.
+    # NB: on PyPI the "python-chess" project is now just "chess"; the sandbox's
+    # "python-chess 1.11.2" is chess==1.11.2.
+    "chess==1.11.2",
+    "numpy>=2.1,<3",
+    "onnxruntime>=1.20",
+    "numba>=0.60",
+]
+
+[project.optional-dependencies]
+# Local-only tooling for the coaching bot. Never shipped in agent.zip.
+coach = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "httpx>=0.27",
+    "sqlalchemy>=2.0",
+    "apscheduler>=3.10",
+    "pydantic>=2.9",
+]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.7",
+]
+
+[project.urls]
+Homepage = "https://github.com/am318/chess-coach"
+Source = "https://github.com/am318/chess-coach"
+
+[tool.uv]
+# torch 2.x cpu wheels for py3.12 exist on PyPI; pin loosely for local dev.
+# The sandbox provides torch 2.13.0+cpu; we only need it for NNUE training (M6).
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI uses `Depends()`/`Body()` in argument defaults by design.
+"coach/server/*.py" = ["B008"]
+
+[tool.pytest.ini_options]
+markers = ["slow: needs Stockfish and takes a few seconds (skips when it is absent)"]
+testpaths = ["tests"]
+addopts = "-q"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["engine", "coach"]

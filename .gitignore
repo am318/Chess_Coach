@@ -1,0 +1,45 @@
+__pycache__/
+*.pyc
+.venv/
+.uv/
+build/
+dist/
+*.egg-info/
+
+# Large / generated assets
+data/
+!data/.gitkeep
+*.bin
+*.onnx
+*.safetensors
+*.pt
+*.nnue
+agent.zip
+
+# Coach runtime
+coach.toml
+coach.db
+coach.db.bak*
+*.sqlite
+*.sqlite3
+.coach/
+
+# Frontend
+node_modules/
+coach/web/dist/
+coach.db-wal
+coach.db-shm
+
+# Built macOS bundle (regenerate with `make app`)
+Chess Coach.app/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+.ruff_cache/
+.pytest_cache/
+
+# Throwaway demo database (scripts/demo_data.py)
+demo/

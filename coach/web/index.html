@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Chess Coach</title>
+<!-- Inline so the app needs no extra file, and so the tab and the phone's
+     home-screen bookmark are recognisable rather than a blank page icon. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%232e2a24'/%3E%3Ctext x='16' y='24' font-size='22' text-anchor='middle' fill='%23efd9b5'%3E%E2%99%9E%3C/text%3E%3C/svg%3E">
+<style>
+  :root { --light:#eddbb6; --dark:#ac7f5c; --edge:#6f5a42;
+          --sel:rgba(255,235,120,.50); --dest:rgba(26,24,20,.26);
+          --lastwash:rgba(255,206,84,.40); --hintwash:rgba(96,206,128,.46);
+          --good:#3f6f43; --bad:#8a3b3b; --panel:#2e2a24; --line:#4a443b; --warn:#8a6a2a; }
+  * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+         background:#1b1a17; color:#e8e4dc; display:flex; justify-content:center; }
+  main { width:100%; max-width:540px; padding:12px 12px 40px; }
+  h1 { font-size:15px; font-weight:600; margin:2px 0 8px; }
+  nav { display:flex; gap:4px; margin-bottom:10px; }
+  nav button { flex:1; background:var(--panel); border:1px solid var(--line); color:#cfc9bd;
+               padding:8px 4px; border-radius:5px; font-size:12px; }
+  nav button.active { background:#40506b; color:#fff; border-color:#40506b; }
+  .view { display:none; } .view.active { display:block; }
+  .board { width:100%; aspect-ratio:1/1; display:grid; grid-template-columns:repeat(8,1fr);
+           grid-template-rows:repeat(8,1fr); border-radius:5px; overflow:hidden;
+           touch-action:manipulation; user-select:none;
+           box-shadow:0 0 0 1px var(--edge), 0 6px 20px rgba(0,0,0,.45); }
+  .sq { position:relative; cursor:pointer; }
+  .sq.light { background:var(--light); } .sq.dark { background:var(--dark); }
+  /* Last move, the best-move hint and check tint the square itself, so they
+     compose with the selection and the destination dots, which live on the
+     .mk layer above. A 4px inset ring for all three read as noise. */
+  .sq.last { background-image:linear-gradient(var(--lastwash),var(--lastwash)); }
+  .sq.hint { background-image:linear-gradient(var(--hintwash),var(--hintwash)); }
+  .sq.check { background-image:radial-gradient(circle,#ff5f4b 0%,#d63a26 38%,
+                                               rgba(214,58,38,0) 72%); }
+  /* Coordinates ride inside the edge squares rather than in a gutter, so the
+     board stays a plain 1:1 grid wherever it is embedded. Each label takes the
+     other square colour, which keeps it legible on light and dark alike. */
+  .sq::before,.sq::after { position:absolute; z-index:3; pointer-events:none;
+                           font-size:min(2.3vw,11px); font-weight:700; line-height:1;
+                           opacity:.75; }
+  .sq[data-crank]::before { content:attr(data-crank); top:3px; left:3px; }
+  .sq[data-cfile]::after  { content:attr(data-cfile); bottom:2px; right:3px; }
+  .sq.light::before,.sq.light::after { color:var(--dark); }
+  .sq.dark::before,.sq.dark::after   { color:var(--light); }
+  /* Marker layer: selection wash and legal-move markers. */
+  .sq .mk { position:absolute; inset:0; z-index:1; pointer-events:none; }
+  .sq.sel .mk { background:var(--sel); }
+  .sq.dest .mk { background:radial-gradient(circle,var(--dest) 0 17%,transparent 18%); }
+  /* A capture is a ring round the piece, not a dot hidden underneath it. */
+  .sq.dest.occupied .mk { background:radial-gradient(circle,transparent 0 50%,
+                                    var(--dest) 52% 63%,transparent 64%); }
+  .sq .pc { position:absolute; inset:0; width:100%; height:100%; z-index:2;
+            pointer-events:none; filter:drop-shadow(0 1px 1px rgba(0,0,0,.30)); }
+  .sq .pc.empty { display:none; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:10px 0; }
+  button,select { background:var(--panel); color:#e8e4dc; border:1px solid var(--line);
+                  border-radius:5px; padding:7px 11px; font-size:13px; }
+  button:disabled { opacity:.45; }
+  button.primary { background:var(--good); border-color:var(--good); }
+  button.big { font-size:15px; padding:13px 18px; font-weight:600; width:100%; }
+  button.g { flex:1; }
+  input[type=range] { flex:1; min-width:110px; }
+  .status { min-height:20px; font-size:13px; margin-top:8px; }
+  .muted { color:#9a938a; font-size:12px; }
+  /* The line that punishes the move you played, under the puzzle status. */
+  .refutation { margin:4px 0 0; font-size:12.5px; letter-spacing:.02em; }
+  .refutation b { color:#ff9e7a; font-weight:600; }
+  .reflabel { color:#6f6862; text-transform:uppercase; font-size:10px;
+              letter-spacing:.08em; margin-right:6px; }
+  /* ---- Explore: playing the position on after the card has been graded ---- */
+  .exrow { display:flex; gap:6px; flex-wrap:wrap; margin:8px 0 0; }
+  .exrow button { flex:1 1 auto; font-size:12px; padding:7px 9px; }
+  .exrow button.on { background:#40506b; border-color:#40506b; color:#fff; }
+  .explore { border:1px solid var(--line); border-radius:6px; padding:9px 10px;
+             margin-top:8px; background:#262219; }
+  .explore h3 { margin:0 0 2px; font-size:12px; font-weight:600; color:#e8b96b; }
+  .exeval { float:right; font-family:ui-monospace,monospace; font-size:12.5px;
+            font-variant-numeric:tabular-nums; color:#cfc9bd; }
+  /* Eval bar: grows from the centre, so which way it leans is the whole read. */
+  .exbar { height:6px; border-radius:3px; background:#151310; overflow:hidden;
+           position:relative; margin:7px 0 6px; }
+  .exbar i { position:absolute; top:0; bottom:0; background:#6fae74;
+             transition:width .22s ease,left .22s ease; }
+  .exbar i.neg { background:#b4584a; }
+  .exmsg { font-size:12.5px; margin:0; min-height:17px; color:#c9c2b7; }
+  .exmsg.win { color:#8fd39a; } .exmsg.lose { color:#e8998a; }
+  .exmoves { font-family:ui-monospace,monospace; font-size:11.5px; color:#8d867d;
+             margin:5px 0 0; word-break:break-word; }
+  .cand { display:flex; gap:9px; align-items:baseline; padding:6px 2px;
+          border-top:1px solid #3a352e; font-size:12.5px; cursor:pointer; }
+  .cand:hover { background:#2f2a21; }
+  .cand b { font-family:ui-monospace,monospace; min-width:48px; color:#e8e4dc; }
+  .cand.top b { color:#8fd39a; }
+  .cand .cp { color:#9a938a; font-family:ui-monospace,monospace;
+              font-variant-numeric:tabular-nums; min-width:42px; }
+  .cand .why { color:#9a938a; flex:1; }
+  .badge { display:inline-block; background:#4a3f6b; border-radius:4px; padding:2px 7px;
+           font-size:11px; margin-left:6px; }
+  .bars { display:flex; flex-direction:column; gap:6px; margin:8px 0; }
+  .bar { background:#241f1a; border-radius:4px; overflow:hidden; height:26px; position:relative; }
+  .bar > span { position:absolute; inset:0; display:flex; align-items:center; padding:0 8px;
+                font-size:12px; z-index:2; }
+  .bar > i { position:absolute; left:0; top:0; bottom:0; background:#5a4a7a; }
+  .glist { list-style:none; margin:0; padding:0; max-height:230px; overflow:auto;
+           border:1px solid var(--line); border-radius:5px; }
+  .glist li { padding:8px 10px; border-bottom:1px solid #33302a; font-size:12px; cursor:pointer; }
+  .glist li:hover { background:#26221d; }
+  .moment { border:1px solid var(--line); border-radius:5px; padding:8px; margin:6px 0; font-size:12px; }
+  .moment b { color:#e8b96b; }
+  svg.graph { width:100%; height:90px; background:#141210; border-radius:4px; }
+  #pgn { width:100%; height:80px; margin-top:8px; background:#111; color:#9db;
+         border:1px solid #333; font-family:ui-monospace,monospace; font-size:11px; }
+
+  /* ---- Today ---- */
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px;
+          padding:14px; margin-bottom:12px; }
+  .card h2 { font-size:14px; margin:0 0 4px; font-weight:600; }
+  .plan { list-style:none; margin:10px 0 0; padding:0; }
+  .plan li { display:grid; grid-template-columns:20px 52px 1fr; gap:8px; align-items:start;
+             padding:7px 0; border-top:1px solid #3a352e; font-size:12.5px; }
+  .plan li:first-child { border-top:none; }
+  .plan li .tick { color:#6a6259; }
+  .plan li.done .tick { color:var(--good); }
+  .plan li.now { color:#fff; }
+  .plan li.now .tick { color:#e8b96b; }
+  .plan li .mins { color:#9a938a; font-variant-numeric:tabular-nums; }
+  .plan li .d { color:#9a938a; font-size:11.5px; display:block; margin-top:2px; }
+  .plan li.now .d { color:#c9c2b7; }
+  .clocks { display:flex; gap:8px; justify-content:space-between; margin:8px 0; }
+  .clk { flex:1; text-align:center; padding:8px; border-radius:5px; background:#241f1a;
+         border:1px solid var(--line); font-variant-numeric:tabular-nums;
+         font-family:ui-monospace,monospace; font-size:19px; }
+  .clk.run { border-color:#7a9; color:#cfe9d8; }
+  .clk.low { color:#e88; border-color:var(--bad); }
+  .clk small { display:block; font-size:10px; color:#9a938a; font-family:inherit; }
+  .blockclock { float:right; font-size:11.5px; color:#9a938a; font-weight:400;
+                font-variant-numeric:tabular-nums; font-family:ui-monospace,monospace; }
+  .blockclock.low { color:#e8b96b; }
+  .blockclock.over { color:#e88; }
+  .progress { height:5px; background:#241f1a; border-radius:3px; overflow:hidden; margin-top:8px; }
+  .progress i { display:block; height:100%; background:var(--good); }
+  .warnbox { background:#3a2f1c; border:1px solid var(--warn); border-radius:6px;
+             padding:11px; margin:8px 0; font-size:13px; }
+  .warnbox .row { margin:9px 0 0; }
+  .pillbar { display:flex; gap:5px; flex-wrap:wrap; margin-top:6px; }
+  .pill { font-size:11px; background:#241f1a; border:1px solid var(--line);
+          border-radius:20px; padding:2px 9px; color:#c9c2b7; }
+  .pill.on { background:#40506b; border-color:#40506b; color:#fff; }
+  /* ---- Openings ---- */
+  .opgroup { font-size:11px; text-transform:uppercase; letter-spacing:.08em;
+             color:#9a938a; margin:16px 0 6px; }
+  .opcard { background:var(--panel); border:1px solid var(--line); border-radius:8px;
+            padding:11px 12px; margin-bottom:8px; cursor:pointer; }
+  .opcard:hover { border-color:#6a6156; }
+  .opcard.on { border-color:#40506b; }
+  .opcard h3 { font-size:14px; margin:0; font-weight:600; display:flex; gap:8px;
+               align-items:baseline; flex-wrap:wrap; }
+  .opcard h3 .eco { color:#9a938a; font-weight:400; font-size:11.5px; }
+  .opcard p { margin:5px 0 0; font-size:12.5px; color:#c9c2b7; line-height:1.4; }
+  .opcard .opyours { color:#9a938a; font-size:12px; }
+  .ophdr { margin-top:0; }
+  .ophdr span { font-weight:600; font-size:14px; }
+  .opnote { min-height:36px; margin:6px 0 0; font-size:13px; line-height:1.45;
+            color:#e8e4dc; background:#262219; border-left:3px solid #e8b96b;
+            border-radius:0 5px 5px 0; padding:7px 10px; }
+  .opnote:empty { display:none; }
+  .opmoves { font-family:ui-monospace,monospace; font-size:12.5px; line-height:1.9;
+             margin:8px 0; }
+  .opmoves span { cursor:pointer; padding:1px 4px; border-radius:3px; white-space:nowrap;
+                  display:inline-block; line-height:1.5; }
+  .opmoves i.pair { font-style:normal; white-space:nowrap; }
+  .opmoves span.lbl { cursor:default; color:#6f6862; padding:0 1px 0 4px; }
+  .opmoves span.mv.yours { color:#e8e4dc; }
+  .opmoves span.mv.theirs { color:#9a938a; }
+  .opmoves span.mv.noted { text-decoration:underline dotted #e8b96b; text-underline-offset:3px; }
+  .opmoves span.mv.cur { background:#40506b; color:#fff; }
+  .oplines { list-style:none; margin:8px 0 0; padding:0; }
+  .oplines li { display:flex; gap:8px; align-items:center; padding:8px 2px;
+                border-top:1px solid #3a352e; font-size:12.5px; }
+  .oplines li:first-child { border-top:none; }
+  .oplines li .nm { flex:1; cursor:pointer; }
+  .oplines li.cur .nm { color:#fff; font-weight:600; }
+  .oplines li button { font-size:12px; padding:5px 9px; }
+  .st { font-size:10.5px; border-radius:20px; padding:1px 8px; border:1px solid var(--line);
+        color:#c9c2b7; white-space:nowrap; }
+  .st.new { border-color:#6a6156; }
+  .st.learning { border-color:var(--warn); color:#e8c98a; }
+  .st.solid { border-color:var(--good); color:#9fd3a4; }
+  .st.due { background:#6b5a2a; border-color:#6b5a2a; color:#fff; }
+  .opplans { margin:6px 0 0; padding-left:18px; font-size:12.5px; color:#c9c2b7; }
+  .opplans li { margin:3px 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Chess Coach
+    <span id="acctBadge" class="badge" hidden></span>
+    <span id="syncBadge" class="badge" style="background:#6b5a2a" hidden></span>
+  </h1>
+  <nav>
+    <button data-view="today" class="active">Today</button>
+    <button data-view="play">Play</button>
+    <button data-view="puzzles">Puzzles</button>
+    <button data-view="openings">Openings</button>
+    <button data-view="review">Review</button>
+    <button data-view="dashboard">Stats</button>
+  </nav>
+
+  <!-- ============================== TODAY ============================== -->
+  <section id="today" class="view active">
+    <div id="todayCard" class="card"><p class="muted">Loading today's plan…</p></div>
+    <div id="todayStage"></div>
+  </section>
+
+  <!-- =============================== PLAY ============================== -->
+  <section id="play" class="view">
+    <p class="muted">Free play. The Today tab picks all of this for you —
+      use this tab only when you want to override it.</p>
+    <div class="board" id="playBoard"></div>
+    <div class="clocks" id="playClocks" hidden>
+      <div class="clk" id="clkOpp"><small>coach</small><span>—</span></div>
+      <div class="clk" id="clkYou"><small>you</small><span>—</span></div>
+    </div>
+    <div id="playWarn"></div>
+    <div class="row">
+      <button id="newGame" class="primary">New game</button>
+      <button id="resign">Resign</button>
+      <label><input type="checkbox" id="autoElo" checked> auto Elo</label>
+      <label>Elo <span id="eloVal">1500</span></label>
+      <input id="elo" type="range" min="400" max="2400" step="50" value="1500" disabled>
+      <select id="account"></select>
+      <select id="style" title="opponent style">
+        <option value="auto">auto (adapts + rotates)</option>
+        <option value="solid">solid</option>
+        <option value="provocative">provocative</option>
+        <option value="gambit">gambit</option>
+      </select>
+      <select id="tc" title="time control">
+        <option value="">no clock</option>
+        <option value="180,2">3+2</option>
+        <option value="300,0">5+0</option>
+        <option value="300,3">5+3</option>
+        <option value="600,5">10+5</option>
+        <option value="900,10">15+10</option>
+      </select>
+      <label><input type="checkbox" id="coached"> coach me</label>
+      <label><input type="checkbox" id="weakOpening" checked> weak opening</label>
+    </div>
+    <div class="status" id="playStatus">Press “New game”.</div>
+    <div class="status" id="reviewLink" hidden></div>
+    <textarea id="pgn" readonly hidden></textarea>
+  </section>
+
+  <!-- ============================= PUZZLES ============================= -->
+  <section id="puzzles" class="view">
+    <div class="board" id="puzzleBoard"></div>
+    <div class="status" id="puzzleStatus">Loading…</div>
+    <div class="row">
+      <button id="nextPuzzle" class="primary" hidden>Next</button>
+      <button id="skipPuzzle">Skip</button>
+      <span class="muted" id="puzzleMeta"></span>
+    </div>
+    <p class="muted">Graded automatically from whether you found it and how long it took.
+      Equally good alternatives are accepted.</p>
+  </section>
+
+  <!-- ============================= OPENINGS ============================ -->
+  <section id="openings" class="view">
+    <div id="opList"><p class="muted">Loading…</p></div>
+    <div id="opDetail" hidden>
+      <div class="row ophdr">
+        <button id="opBack">← Openings</button>
+        <span id="opTitle"></span>
+      </div>
+      <div class="board" id="opBoard"></div>
+      <div class="status" id="opStatus"></div>
+      <p class="opnote" id="opNote"></p>
+      <div class="row" id="opStudyCtl">
+        <button class="g" id="opFirst" title="start">⏮</button>
+        <button class="g" id="opPrev" title="back">◀</button>
+        <button class="g" id="opNext" title="forward">▶</button>
+        <button class="g" id="opLast" title="end of line">⏭</button>
+      </div>
+      <div class="row" id="opDrillCtl" hidden>
+        <button id="opDrillNext" class="primary" hidden>Next line</button>
+        <button id="opDrillStop">Back to study</button>
+        <span class="muted" id="opDrillMeta"></span>
+      </div>
+      <div class="opmoves" id="opMoves"></div>
+      <div id="opInfo"></div>
+    </div>
+  </section>
+
+  <!-- ============================== REVIEW ============================= -->
+  <section id="review" class="view">
+    <div class="row"><select id="reviewAccount"></select>
+      <button id="refreshGames">Refresh</button></div>
+    <ul class="glist" id="gameList"></ul>
+    <div id="reviewBody"></div>
+  </section>
+
+  <!-- ============================ DASHBOARD =========================== -->
+  <section id="dashboard" class="view">
+    <div class="row"><select id="dashAccount"></select>
+      <button id="refreshDash">Refresh</button></div>
+    <div id="dashBody"><p class="muted">Loading…</p></div>
+  </section>
+</main>
+<script src="/static/pieces.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
