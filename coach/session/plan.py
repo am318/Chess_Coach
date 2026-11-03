@@ -336,7 +336,7 @@ def build_plan(account: str | None = None, minutes: int = DEFAULT_MINUTES) -> di
             title="Close",
             minutes=mins["close"],
             detail="One thing to remember, and tomorrow's focus.",
-            params={},
+            params={"remember": remember(profile)},
         ),
     ]
 
@@ -357,6 +357,31 @@ def _game_detail(game: GamePlan) -> str:
     than following it, which used to read "a long clock: ... so today is blitz"."""
     note = game.speed_note
     return note[:1].upper() + note[1:] if note else game.why
+
+
+def remember(profile: dict | None) -> str | None:
+    """The one sentence the close block hands back.
+
+    A habit beats a fact here: it is the thing that can change in tomorrow's
+    games without any study. So the in-game situation finding comes first, then
+    time allocation, then the most expensive recurring motif.
+    """
+    profile = profile or {}
+    found = (profile.get("game_state") or {}).get("finding")
+    if found:
+        return (f"You blunder {found['blunder_ratio']:.1f}x as often on "
+                f"{found['label']}. {found['advice']}")
+    ta = profile.get("time_allocation") or {}
+    ratio = ta.get("allocation_ratio")
+    if ratio is not None and ratio < 0.95:
+        return ("You spend less time on the positions that decide the game than on "
+                "quiet ones. When something is en prise or a check is on, stop and look.")
+    motifs = profile.get("tactics_motifs") or []
+    if motifs:
+        from coach.analysis.motifs import label
+
+        return f"Your most expensive pattern lately: {label(motifs[0]['key'])}."
+    return None
 
 
 def _notes(profile: dict | None, primary: str, secondary: str, game: GamePlan) -> list[str]:

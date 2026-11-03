@@ -87,6 +87,7 @@ class _Row:
     decision_w: float    # 0..1, how much choice the position offered
     critical: bool       # the position was worth spending clock on
     seconds: float | None  # wall-clock seconds spent on the move, if known
+    states: tuple[str, ...] = ()  # in-game situation the move was made in, see GAME_STATES
 
 
 def _fetch(session: Session, account: str | None) -> list[_Row]:
@@ -102,7 +103,7 @@ def _fetch(session: Session, account: str | None) -> list[_Row]:
     )
     if account:
         q = q.where(Game.account == account)
-    pairs = session.execute(q.order_by(Game.played_at)).all()
+    pairs = session.execute(q.order_by(Game.played_at, Game.id, Move.ply)).all()
 
     now = datetime.now(UTC).replace(tzinfo=None)
     # "recent" = the last TREND_WINDOW_GAMES distinct games, by game not by move,
@@ -117,7 +118,11 @@ def _fetch(session: Session, account: str | None) -> list[_Row]:
     prior_ids = set(game_order[-2 * TREND_WINDOW_GAMES:-TREND_WINDOW_GAMES])
 
     rows: list[_Row] = []
+    prev: dict[int, Move] = {}
+    medians = _median_seconds(pairs)
     for m, g in pairs:
+        states = _states(m, g, prev.get(g.id), medians.get(g.id))
+        prev[g.id] = m
         age_days = (now - g.played_at).total_seconds() / 86400.0 if g.played_at else 0.0
         weight = 0.5 ** (max(0.0, age_days) / HALF_LIFE_DAYS)
         if g.id in recent_ids:
@@ -147,8 +152,119 @@ def _fetch(session: Session, account: str | None) -> list[_Row]:
             decision_w=1.0 if m.decision_w is None else float(m.decision_w),
             critical=is_critical(m.forcingness, m.eval_before_cp, m.second_best_cp),
             seconds=m.seconds_spent,
+            states=states,
         ))
     return rows
+
+
+# The situation a move was made in, read from the game *before* the move - so,
+# unlike time spent, nothing the player decides on this move can bias which
+# bucket it lands in. These are the habit failures that look identical to a
+# knowledge gap in an average: the same player who finds the tactic in a puzzle
+# misses it on the move after winning a piece.
+GAME_STATES = {
+    "after_gaining": "the move after you gain material or an edge",
+    "after_own_error": "the move after your own mistake",
+    "after_long_think": "the move after a long think",
+    "winning": "positions where you are clearly winning",
+    "losing": "positions where you are clearly worse",
+}
+STATE_ADVICE = {
+    "after_gaining": ("Right after you win something, ask what their last move "
+                      "threatened before you relax."),
+    "after_own_error": ("After a mistake, take ten seconds to reset: the next move is "
+                        "where a worse position becomes a lost one."),
+    "after_long_think": ("After a long think, don't snap off the next move - their "
+                         "reply may have changed what the position needs."),
+    "winning": ("When you're ahead, check their checks and captures first and look "
+                "for the simple way to trade down."),
+    "losing": ("When you're worse, look for the most stubborn move rather than "
+               "the swindle."),
+}
+GAIN_CP = 150          # mover-POV eval rise since our previous move
+DECIDED_CP = 300       # beyond this the position is "clearly" winning or losing
+LONG_THINK_S = 30.0    # a long think: at least this many seconds...
+LONG_THINK_RATIO = 3.0  # ...and this many times the player's median in that game
+
+
+def _mover_eval(m: Move, g: Game) -> int | None:
+    if m.eval_before_cp is None:
+        return None
+    return m.eval_before_cp if g.color == "white" else -m.eval_before_cp
+
+
+def _median_seconds(pairs) -> dict[int, float]:
+    per: dict[int, list[float]] = defaultdict(list)
+    for m, g in pairs:
+        if m.seconds_spent is not None:
+            per[g.id].append(float(m.seconds_spent))
+    out = {}
+    for gid, vals in per.items():
+        vals.sort()
+        out[gid] = vals[len(vals) // 2]
+    return out
+
+
+def _states(m: Move, g: Game, prev: Move | None, median_s: float | None) -> tuple[str, ...]:
+    out: list[str] = []
+    now = _mover_eval(m, g)
+    if now is not None:
+        if now >= DECIDED_CP:
+            out.append("winning")
+        elif now <= -DECIDED_CP:
+            out.append("losing")
+    if prev is not None:
+        before = _mover_eval(prev, g)
+        if now is not None and before is not None and now - before >= GAIN_CP \
+                and before < DECIDED_CP:
+            out.append("after_gaining")
+        if prev.error_bucket in ("mistake", "blunder"):
+            out.append("after_own_error")
+        if (prev.seconds_spent is not None and median_s
+                and prev.seconds_spent >= LONG_THINK_S
+                and prev.seconds_spent >= LONG_THINK_RATIO * median_s):
+            out.append("after_long_think")
+    return tuple(out)
+
+
+def _game_state(rows: list[_Row], summ) -> dict:
+    """Blunder rate in each in-game situation, against the player's own baseline.
+
+    Reported as a ratio to the baseline because the absolute rates differ a lot
+    between players; "you blunder 2.3x as often on the move after winning
+    material" is the finding, whatever the base rate is.
+
+    Decided positions carry a caveat: cp-loss is clamped, so at +8 a further
+    pawn thrown away barely registers. Blunder rate survives that better than
+    the average does, and it is what the finding is chosen on.
+    """
+    base = summ([(r.cp_loss, r.weight * r.decision_w) for r in rows])
+    by_state: dict[str, list[tuple[int, float]]] = defaultdict(list)
+    for r in rows:
+        for st in r.states:
+            by_state[st].append((r.cp_loss, r.weight * r.decision_w))
+    states = {}
+    for st, vals in by_state.items():
+        s = summ(vals)
+        s["label"] = GAME_STATES[st]
+        s["blunder_ratio"] = (round(s["blunder_rate"] / base["blunder_rate"], 2)
+                              if base["blunder_rate"] else None)
+        s["cp_ratio"] = (round(s["avg_cp_loss"] / base["avg_cp_loss"], 2)
+                         if base["avg_cp_loss"] else None)
+        states[st] = s
+
+    finding = None
+    best_ratio = 0.0
+    for st, s in states.items():
+        ratio = s["blunder_ratio"] or 0.0
+        need = 1.5 if st in ("winning", "losing") else 1.3
+        if s["weight"] < MIN_EFFECTIVE_W * 2 or ratio < need:
+            continue
+        if ratio > best_ratio:
+            best_ratio = ratio
+            finding = {"state": st, "label": s["label"], "blunder_ratio": ratio,
+                       "advice": STATE_ADVICE[st]}
+    return {"baseline": base, "states": states, "finding": finding}
 
 
 def _repertoire(session: Session, account: str | None) -> dict:
@@ -482,6 +598,7 @@ def _build(session: Session, account: str | None) -> dict:
             "note": "positions where the opponent erred and you had a stronger reply",
         },
         "time_allocation": _time_allocation(rows),
+        "game_state": _game_state(rows, summ),
     }
 
     profile["repertoire"] = _repertoire(session, account)

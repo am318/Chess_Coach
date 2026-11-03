@@ -1275,6 +1275,11 @@ function renderClose() {
     `<div class="card"><h2>Done for today</h2>` +
     `<p>${puzzles} puzzles · ${drills ? drills + " drills · " : ""}` +
     `${games} game${games === 1 ? "" : "s"} at ${plan.time_control}.</p>` + timing +
+    (() => {
+      const close = (plan.blocks || []).find((b) => b.kind === "close") || {};
+      const r = (close.params || {}).remember;
+      return r ? `<p class="remember"><b>Remember:</b> ${esc(r)}</p>` : "";
+    })() +
     `<p class="muted">Worked on <b>${PILLAR_LABEL[plan.focus_pillar] || plan.focus_pillar}</b>` +
     ` and drilled <b>${plan.secondary_pillar}</b>.</p>` +
     `<p class="muted">Tomorrow's plan is rebuilt from what you just played — the leak that` +
@@ -2036,6 +2041,29 @@ async function loadDashboard() {
         `<b style="color:#ff9e7a">${((1 - ta.allocation_ratio) * 100).toFixed(0)}% less</b> ` +
         `time where it matters, and ${(ta.rushed_critical_rate * 100).toFixed(0)}% of those ` +
         `positions go by in under ${ta.rushed_seconds}s</p>`);
+    }
+  }
+
+  // In-game situations: the habit failures an average can't separate from a
+  // knowledge gap - the same tactic found in a puzzle, missed the move after
+  // winning a piece.
+  const gs = prof.game_state || {};
+  const st = Object.entries(gs.states || {}).filter(([, v]) => v.weight >= 12 && v.blunder_ratio != null);
+  if (st.length) {
+    body.insertAdjacentHTML("beforeend",
+      "<p class='muted'>Blunder rate by situation, against your own baseline</p>");
+    const gx = document.createElement("div"); gx.className = "bars";
+    const maxR = Math.max(...st.map(([, v]) => v.blunder_ratio), 1);
+    st.sort((a, b) => b[1].blunder_ratio - a[1].blunder_ratio);
+    for (const [, v] of st) {
+      const el = document.createElement("div"); el.className = "bar";
+      el.innerHTML = `<i style="width:${(v.blunder_ratio / maxR * 100).toFixed(0)}%"></i>` +
+        `<span>${esc(v.label)} — ${v.blunder_ratio}× your usual blunder rate (n=${v.n})</span>`;
+      gx.appendChild(el);
+    }
+    body.appendChild(gx);
+    if (gs.finding) {
+      body.insertAdjacentHTML("beforeend", `<p class="muted">• ${esc(gs.finding.advice)}</p>`);
     }
   }
 
