@@ -480,6 +480,84 @@ def api_calc_check(
         return JSONResponse(result)
 
 
+@app.get("/api/puzzles/{puzzle_id}")
+def api_puzzle_get(puzzle_id: int) -> JSONResponse:
+    Session = session_factory()
+    with Session() as session:
+        p = session.get(Puzzle, puzzle_id)
+        if p is None:
+            raise HTTPException(404, "puzzle not found")
+        return JSONResponse(_puzzle_json(p))
+
+
+@app.get("/api/woodpecker")
+def api_woodpecker() -> JSONResponse:
+    from coach.puzzles import woodpecker as wp
+
+    Session = session_factory()
+    with Session() as session:
+        ws = wp.active(session)
+        out = {"set": wp.state(ws) if ws else None, "available": wp.available(session),
+               "min_size": wp.MIN_SIZE, "max_size": wp.MAX_SIZE,
+               "default_size": wp.DEFAULT_SIZE}
+        session.commit()
+        return JSONResponse(out)
+
+
+@app.post("/api/woodpecker/start")
+def api_woodpecker_start(size: int = Body(default=150, embed=True)) -> JSONResponse:
+    from coach.puzzles import woodpecker as wp
+
+    Session = session_factory()
+    with Session() as session:
+        if wp.active(session) is not None:
+            raise HTTPException(409, "a set is already in progress")
+        try:
+            ws = wp.build(session, size)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        session.commit()
+        return JSONResponse({"set": wp.state(ws)})
+
+
+@app.post("/api/woodpecker/{set_id}/answer")
+def api_woodpecker_answer(
+    set_id: int,
+    puzzle_id: int = Body(),
+    solved: bool = Body(),
+    elapsed_ms: int | None = Body(default=None),
+) -> JSONResponse:
+    from coach.puzzles import woodpecker as wp
+    from coach.store.db import WoodpeckerSet
+
+    Session = session_factory()
+    with Session() as session:
+        ws = session.get(WoodpeckerSet, set_id)
+        if ws is None or ws.finished_at is not None:
+            raise HTTPException(404, "no such active set")
+        try:
+            st = wp.answer(session, ws, puzzle_id, solved, elapsed_ms)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        session.commit()
+        return JSONResponse({"set": st})
+
+
+@app.post("/api/woodpecker/{set_id}/abandon")
+def api_woodpecker_abandon(set_id: int) -> JSONResponse:
+    from coach.puzzles import woodpecker as wp
+    from coach.store.db import WoodpeckerSet
+
+    Session = session_factory()
+    with Session() as session:
+        ws = session.get(WoodpeckerSet, set_id)
+        if ws is None:
+            raise HTTPException(404, "no such set")
+        ws.finished_at = wp._now()
+        session.commit()
+        return JSONResponse({"ok": True})
+
+
 @app.get("/api/settings/training")
 def api_training_settings() -> JSONResponse:
     from coach.puzzles import candidates as cand

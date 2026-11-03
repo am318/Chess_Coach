@@ -256,6 +256,25 @@ class TrainingSession(Base):
     block_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class WoodpeckerSet(Base):
+    """A fixed set of puzzles solved in the same order, pass after pass.
+
+    Deliberately outside the SRS: the method works because the set does *not*
+    change, so the patterns are drilled to speed rather than scheduled for
+    retention. ``passes`` is JSON - one entry per pass with its start, end,
+    answered ids, solves and total milliseconds.
+    """
+
+    __tablename__ = "woodpecker_sets"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    puzzle_ids: Mapped[str] = mapped_column(Text)               # JSON list, fixed order
+    passes: Mapped[str] = mapped_column(Text, default="[]")     # JSON list of pass dicts
+    max_passes: Mapped[int] = mapped_column(Integer, default=6)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 def make_engine(db_path: Path | None = None):
     """Build an engine with the pragmas we want on every connection.
 

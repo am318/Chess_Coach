@@ -431,6 +431,11 @@ def _notes(profile: dict | None, primary: str, secondary: str, game: GamePlan) -
         )
     elif missing:
         notes.append("Little or no history at: " + ", ".join(missing) + ".")
+    if primary == "tactics":
+        notes.append(
+            "Tactics is today's focus. For pattern speed on top of the daily hour, a "
+            "Woodpecker cycle (Train, then Cycle) drills one fixed set faster each pass."
+        )
     notes.append(f"Second weakness covered by the drill block: {secondary}.")
     return notes
 
