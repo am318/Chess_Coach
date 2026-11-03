@@ -272,6 +272,16 @@ def build_plan(account: str | None = None, minutes: int = DEFAULT_MINUTES) -> di
     drill_kind, drill_detail, drill_sources = _DRILL_FOR.get(
         secondary, ("puzzles", "Mixed puzzles from your own games", ["own-game"])
     )
+    # Every other tactics drill is calculation rather than recognition: the same
+    # kind of position, but the whole line typed before anything moves. Seeing
+    # the first move of a tactic is the easy half.
+    if secondary == "tactics" and rotation % 2 == 1:
+        drill_kind, drill_detail, drill_sources = (
+            "calculation",
+            ("Calculate the whole line before you move: type your moves and their "
+             "best replies, then check it"),
+            ["own-game", "library"],
+        )
 
     blocks = [
         Block(

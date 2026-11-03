@@ -432,6 +432,44 @@ def api_puzzle_attempt(
         return JSONResponse(result)
 
 
+@app.get("/api/calc/next")
+def api_calc_next(depth: int | None = None) -> JSONResponse:
+    from coach.puzzles import calculation as calc
+
+    Session = session_factory()
+    with Session() as session:
+        if depth is not None:
+            depth = max(calc.MIN_DEPTH, min(calc.MAX_DEPTH, depth))
+        task = calc.next_task(session, depth)
+        summ = calc.summary(session)
+        session.commit()
+        return JSONResponse({"task": task, "summary": summ})
+
+
+@app.post("/api/calc/{puzzle_id}/check")
+def api_calc_check(
+    puzzle_id: int,
+    line: str = Body(default=""),
+    depth: int = Body(default=2),
+    practice: bool = Body(default=False),
+) -> JSONResponse:
+    """Grade a typed line. Nothing on the board moves until this answers."""
+    from coach.puzzles import calculation as calc
+    from coach.puzzles.solve import stockfish_verifier
+
+    Session = session_factory()
+    with Session() as session:
+        p = session.get(Puzzle, puzzle_id)
+        if p is None:
+            raise HTTPException(404, "puzzle not found")
+        depth = max(calc.MIN_DEPTH, min(calc.MAX_DEPTH, depth))
+        result = calc.check_line(p, line, depth, verifier=stockfish_verifier)
+        if not practice:
+            result["filed"] = calc.record(session, p, result)
+            session.commit()
+        return JSONResponse(result)
+
+
 @app.get("/api/settings/training")
 def api_training_settings() -> JSONResponse:
     from coach.puzzles import candidates as cand

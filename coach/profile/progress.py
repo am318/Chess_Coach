@@ -188,7 +188,18 @@ def dashboard(account: str | None = None, db_path=None) -> dict:
         "motif_recurrence": motif_recurrence(account, db_path),
         "motif_ratings": _motif_ratings(db_path),
         "candidates": _candidates(db_path),
+        "calculation": _calculation(db_path),
     }
+
+
+def _calculation(db_path=None) -> dict:
+    from coach.puzzles.calculation import summary
+
+    Session = session_factory(db_path)
+    with Session() as session:
+        out = summary(session)
+        session.commit()
+        return out
 
 
 def _candidates(db_path=None) -> dict:

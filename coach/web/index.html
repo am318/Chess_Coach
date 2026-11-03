@@ -71,6 +71,10 @@
   .chip.good { background:rgba(110,190,120,.25); }
   .chip.bad { background:rgba(230,110,90,.25); }
   .cands { margin:6px 0; }
+  .calcIn { width:100%; box-sizing:border-box; font-size:16px; padding:8px;
+            background:#1f1c19; color:inherit; border:1px solid #4a4239; border-radius:6px; }
+  .plies { margin:6px 0; line-height:1.9; }
+  #trainModes button.active { outline:2px solid #c9a227; }
   .remember { border-left:3px solid #c9a227; padding:6px 10px; margin:10px 0; background:rgba(201,162,39,.08); }
   /* The line that punishes the move you played, under the puzzle status. */
   .refutation { margin:4px 0 0; font-size:12.5px; letter-spacing:.02em; }
@@ -213,6 +217,7 @@
     <button data-view="puzzles">Puzzles</button>
     <button data-view="openings">Openings</button>
     <button data-view="review">Review</button>
+    <button data-view="train">Train</button>
     <button data-view="dashboard">Stats</button>
   </nav>
 
@@ -311,6 +316,12 @@
     <div id="reviewBody"></div>
   </section>
 
+  <!-- ============================== TRAIN ============================= -->
+  <section id="train" class="view">
+    <div class="row" id="trainModes"></div>
+    <div id="trainStage"></div>
+  </section>
+
   <!-- ============================ DASHBOARD =========================== -->
   <section id="dashboard" class="view">
     <div class="row"><select id="dashAccount"></select>
@@ -320,5 +331,6 @@
 </main>
 <script src="/static/pieces.js"></script>
 <script src="/static/app.js"></script>
+<script src="/static/train.js"></script>
 </body>
 </html>

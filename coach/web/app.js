@@ -189,6 +189,7 @@ function showView(name) {
   if (name === "review") loadGames();
   if (name === "dashboard") loadDashboard();
   if (name === "today") loadToday();
+  if (name === "train" && window.loadTrain) window.loadTrain();
 }
 // Which session/block the Today stage is currently showing. Re-entering the tab
 // used to re-run the block from scratch: the game in progress was abandoned for
@@ -296,6 +297,9 @@ function renderBlock(block) {
   if (block.kind === "warmup") return startPuzzleBlock(block);
   if (block.kind === "drill") {
     if (block.params.drill === "endgame") return startEndgameBlock(block);
+    if (block.params.drill === "calculation" && window.startCalcBlock) {
+      return window.startCalcBlock(block, blockShell(block.title, block.detail));
+    }
     return startPuzzleBlock(block);      // repertoire lines solve like puzzles
   }
   if (block.kind === "game") return startGameBlock(block);
@@ -2191,6 +2195,14 @@ async function loadDashboard() {
     }, "per 100 decisions"));
   }
 
+  const calcS = d.calculation || {};
+  const calcRows = Object.entries(calcS.by_depth || {});
+  if (calcRows.length) {
+    body.insertAdjacentHTML("beforeend",
+      `<p class='muted'>Calculation — rating ${calcS.rating}, now training ${calcS.depth} moves deep: ` +
+      calcRows.map(([dd, v]) => `${dd} deep ${(v.rate * 100).toFixed(0)}% (n=${v.n})`).join(" · ") +
+      "</p>");
+  }
   const cs = (d.candidates || {}).all;
   if (cs && cs.n) {
     body.insertAdjacentHTML("beforeend",
