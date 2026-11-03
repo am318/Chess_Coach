@@ -636,6 +636,58 @@ def api_ladder_testout(rung: int) -> JSONResponse:
         return JSONResponse(out)
 
 
+@app.get("/api/structures")
+def api_structures(account: str | None = None) -> JSONResponse:
+    from coach.openings import structures as st
+
+    account = default_account(_cfg(), account)
+    with session_factory()() as session:
+        stats = st.quiz_stats(session)
+    return JSONResponse({
+        "structures": [{**st.lesson(s.key), "quiz": stats.get(s.key)} for s in st.STRUCTURES],
+        "profile": st.profile(account),
+    })
+
+
+@app.get("/api/structures/{key}/quiz")
+def api_structure_quiz(key: str, account: str | None = None) -> JSONResponse:
+    import random
+
+    from coach.openings import structures as st
+
+    if key not in st.BY_KEY:
+        raise HTTPException(404, "no such structure")
+    account = default_account(_cfg(), account)
+    rng = random.Random()
+    with session_factory()() as session:
+        ex = st.example_position(session, key, account, rng)
+    # The side to judge from: yours in the example game, or either at random.
+    is_owner = (ex["owner"] is None or ex["owner"] == ex["colour"]) if ex else rng.random() < 0.5
+    q = st.quiz(key, is_owner, rng)
+    return JSONResponse({"key": key, "name": st.BY_KEY[key].name, "example": ex,
+                         "is_owner": is_owner, "role": q["role"], "options": q["options"]})
+
+
+@app.post("/api/structures/{key}/answer")
+def api_structure_answer(
+    key: str,
+    is_owner: bool = Body(),
+    choice: str = Body(),
+) -> JSONResponse:
+    from coach.openings import structures as st
+
+    if key not in st.BY_KEY:
+        raise HTTPException(404, "no such structure")
+    s = st.BY_KEY[key]
+    right = s.owner_plan if is_owner else s.against_plan
+    correct = choice.strip() == right
+    with session_factory()() as session:
+        row = st.record_quiz(session, key, correct)
+        session.commit()
+    return JSONResponse({"correct": correct, "right": right, "lesson": st.lesson(key),
+                         "record": row})
+
+
 @app.get("/api/settings/training")
 def api_training_settings() -> JSONResponse:
     from coach.puzzles import candidates as cand

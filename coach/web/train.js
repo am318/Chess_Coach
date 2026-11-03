@@ -436,3 +436,76 @@ function playEndgame(host, ids, testout, onDone, title = "") {
   }
   load();
 }
+
+/* ------------------------------- STRUCTURES ------------------------------- *
+ * What to do once the moves run out. Each lesson names the structure, both
+ * sides' plans, the breaks and the piece placement; the quiz shows a position
+ * from your own games with that structure and asks which plan is yours.     */
+
+registerTrainMode("structures", "Structures", (stage) => renderStructures(stage));
+
+async function renderStructures(stage) {
+  const r = await fetch("/api/structures").then((x) => x.json());
+  stage.innerHTML = "";
+  const card = document.createElement("div");
+  card.className = "card";
+  stage.appendChild(card);
+  const prof = r.profile || [];
+  card.innerHTML = `<h2>Pawn structures</h2>` +
+    `<p class="muted">The plan that comes with the pawns — what to do on move fifteen ` +
+    `when the opening you memorised has run out.</p>` +
+    (prof.length
+      ? `<p class="muted">In your games, worst first:</p><table class="tbl"><tr><th>Structure</th>` +
+        `<th>You were</th><th>Games</th><th>cp / decision</th><th>Score</th></tr>` +
+        prof.slice(0, 8).map((p) => `<tr><td>${esc(p.name)}</td><td>${esc(p.role)}</td>` +
+          `<td>${p.games}</td><td>${p.avg_cp_loss}</td><td>${Math.round(p.score * 100)}%</td></tr>`).join("") +
+        `</table>`
+      : "") +
+    `<div class="row" style="flex-wrap:wrap;margin-top:10px">` +
+    r.structures.map((s) => `<button data-k="${s.key}">${esc(s.name)}` +
+      `${s.quiz ? ` <span class="muted">${s.quiz.right}/${s.quiz.n}</span>` : ""}</button>`).join("") +
+    `</div><div data-r="lesson"></div>`;
+  const host = card.querySelector('[data-r="lesson"]');
+  card.querySelectorAll("[data-k]").forEach((b) =>
+    b.addEventListener("click", () => openStructure(host, r.structures.find((s) => s.key === b.dataset.k))));
+}
+
+function openStructure(host, s) {
+  host.innerHTML = `<h3>${esc(s.name)}</h3><p>${esc(s.recognise)}</p>` +
+    `<p><b>${esc(s.owner_label)}:</b> ${esc(s.owner_plan)}</p>` +
+    `<p><b>${esc(s.against_label)}:</b> ${esc(s.against_plan)}</p>` +
+    `<p class="muted"><b>Breaks.</b> ${esc(s.breaks)}</p>` +
+    `<p class="muted"><b>Pieces.</b> ${esc(s.pieces)}</p>` +
+    `<div class="row"><button class="primary" data-r="quiz">Quiz me on a position from my games</button></div>` +
+    `<div data-r="q"></div>`;
+  host.querySelector('[data-r="quiz"]').onclick = () => structureQuiz(host.querySelector('[data-r="q"]'), s.key);
+  host.scrollIntoView({ behavior: "smooth" });
+}
+
+async function structureQuiz(host, key) {
+  const q = await fetch(`/api/structures/${key}/quiz`).then((x) => x.json());
+  host.innerHTML = (q.example ? `<div class="board" data-r="board"></div>` +
+      `<p class="muted">From one of your games — you were ${esc(q.example.colour)}.</p>`
+    : `<p class="muted">No game of yours has this structure yet, so: imagine you are ` +
+      `${esc(q.role)}.</p>`) +
+    `<p><b>You are ${esc(q.role)}. Which plan fits?</b></p>` +
+    q.options.map((o, i) => `<p><button data-i="${i}" class="opt">${esc(o)}</button></p>`).join("") +
+    `<p data-r="verdict"></p>`;
+  if (q.example) {
+    Board(host.querySelector('[data-r="board"]')).set({
+      fen: q.example.fen, flipped: q.example.colour === "black", dests: {}, onMove: null });
+  }
+  host.querySelectorAll(".opt").forEach((b) => b.addEventListener("click", async () => {
+    const res = await post(`/api/structures/${key}/answer`,
+                           { is_owner: q.is_owner, choice: q.options[+b.dataset.i] });
+    if (!res) return;
+    host.querySelectorAll(".opt").forEach((x) => {
+      x.disabled = true;
+      if (q.options[+x.dataset.i] === res.right) x.classList.add("good");
+    });
+    if (!res.correct) b.classList.add("bad");
+    host.querySelector('[data-r="verdict"]').textContent = res.correct
+      ? `✓ Right. (${res.record.right}/${res.record.n} on this structure)`
+      : `✗ Not this one — the highlighted plan is the one for this side.`;
+  }));
+}

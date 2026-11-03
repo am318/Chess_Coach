@@ -1296,9 +1296,13 @@ async function startReviewBlock(block) {
  * tells you why - so both go on every key moment. */
 function refutationHTML(m) {
   const line = m.refutation_san || [];
-  if (!line.length) return "";
+  const st = m.structure
+    ? `<span class="muted">${esc(m.structure.name)} — as ${esc(m.structure.role)}: </span>` +
+      `${esc(m.structure.plan)}<br>`
+    : "";
+  if (!line.length) return st;
   return `<span class="muted">yours ran into</span> ` +
-         line.map((san, i) => (i % 2 === 0 ? `<b>${san}</b>` : san)).join(" ") + `<br>`;
+         line.map((san, i) => (i % 2 === 0 ? `<b>${san}</b>` : san)).join(" ") + `<br>` + st;
 }
 
 function renderReviewMoments(body, games) {

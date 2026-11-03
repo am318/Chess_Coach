@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from coach.analysis.motifs import label
 from coach.coaching.llm import Narrator, NullNarrator
+from coach.openings.structures import describe_for, detect
 from coach.store.db import Game, session_factory
 
 _CLAMP = 800  # cap eval graph at +-8 pawns so one blunder doesn't flatten it
@@ -156,6 +157,7 @@ def _assemble(session: Session, game: Game, narrator: Narrator) -> dict:
         )
         d = asdict(moment)
         d["motif_label"] = ", ".join(label(t) for t in (m.motif or "").split(",") if t) or None
+        d["structure"] = _structure_note(m.fen_before, game.color)
         d["note"] = narrator.explain(d)
         moments.append(d)
 
@@ -207,3 +209,20 @@ def game_list(account: str | None = None, limit: int = 50, db_path=None) -> list
             }
             for g in q.limit(limit)
         ]
+
+
+def _structure_note(fen: str, colour: str) -> dict | None:
+    """The pawn structure a moment was played in, and its plan for the player.
+
+    A mistake in a Carlsbad is easier to learn from with the minority attack in
+    front of you than with an engine line alone."""
+    try:
+        board = chess.Board(fen)
+    except ValueError:
+        return None
+    found = [f for f in detect(board) if f[0] != "queenside-majority"] or detect(board)
+    if not found:
+        return None
+    key, owner = found[0]
+    d = describe_for(key, owner, colour)
+    return {"key": d["key"], "name": d["name"], "role": d["role"], "plan": d["plan"]}
