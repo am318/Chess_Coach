@@ -408,6 +408,7 @@ function blockShell(title, note, keepClock = false) {
 
 /* ---- Today: puzzle blocks (warm-up and drill) ---- */
 let tpBoard = null, tpPuz = null, tpMoves = [], tpStart = 0, tpDone = 0, tpTarget = 10;
+let tpCands = null;   // candidate list for the current puzzle, null until listed
 let tpHinted = false;
 // Set after "Take back": the miss is filed, so the retry must not score or count.
 let tpPractice = false;
@@ -482,7 +483,8 @@ async function nextTodayPuzzle() {
     $("tpNext").onclick = () => advance(blockRecord());
     return;
   }
-  tpPuz = r.puzzle; tpMoves = []; tpStart = Date.now();
+  tpPuz = r.puzzle; tpMoves = []; tpStart = Date.now(); tpCands = null;
+  clearCandidates($("tpStatus"));
   $("tpMeta").textContent = tpPuz.kind === "line"
     ? `${tpDone + 1}/${tpTarget} · ${tpPuz.name || "your line"}`
     : `${tpDone + 1}/${tpTarget} · ${tpPuz.pillar}` +
@@ -496,10 +498,20 @@ async function stepTodayPuzzle(uci) {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ moves: tpMoves, auto_first: true,
                            elapsed_ms: Date.now() - tpStart, hinted: tpHinted,
-                           practice: tpPractice }),
+                           practice: tpPractice, candidates: tpCands || [] }),
   }).then((x) => x.json());
 
   const flip = res.user_colour === "black";
+  if (res.status === "continue" && res.candidates_required && tpCands === null) {
+    collectCandidates(tpBoard, $("tpStatus"), res, flip, (list) => {
+      tpCands = list;
+      $("tpStatus").textContent = "Now choose your move.";
+      tpBoard.set({ fen: res.fen, flipped: flip, last: res.last_move,
+                    check: res.check, dests: res.dests, onMove: stepTodayPuzzle });
+    });
+    return;
+  }
+  showCandidateGrade($("tpStatus"), res.candidates);
   if (res.status === "continue") {
     $("tpStatus").textContent = uci ? "✓ keep going…"
       : tpPractice ? "Try again — find the move."
@@ -545,6 +557,74 @@ async function stepTodayPuzzle(uci) {
             { convert: res.fen, ideas: res.fen, colour: res.user_colour,
               lastMove: res.last_move });
   finish();
+}
+
+/* Candidate moves first. On quiet and positional puzzles the skill is
+ * generating options, so the player lists two or three moves worth
+ * considering before choosing one. Each candidate is played on the board and
+ * snapped straight back; nothing is sent until the list is done, and the list
+ * is graded only after the puzzle resolves so it can't give the answer away. */
+const PIECE_LETTER = { p: "", n: "N", b: "B", r: "R", q: "Q", k: "K" };
+function moveLabel(fen, uci) {
+  const pc = parseFenBoard(fen)[uci.slice(0, 2)] || "";
+  return `${PIECE_LETTER[pc.toLowerCase()] ?? ""}${uci.slice(0, 2)}–${uci.slice(2, 4)}`;
+}
+function collectCandidates(board, statusEl, res, flip, done) {
+  const req = res.candidates_required;
+  const nLegal = Object.values(res.dests || {}).reduce((a, d) => a + d.length, 0);
+  const need = Math.min(req.min, nLegal);
+  const picked = [];
+  let panel = statusEl.parentElement.querySelector(".cands");
+  if (!panel) {
+    panel = document.createElement("div");
+    panel.className = "cands";
+    statusEl.after(panel);
+  }
+  const paint = () => {
+    statusEl.textContent = picked.length < req.max
+      ? `First, list ${req.min}–${req.max} candidate moves — play each on the board; ` +
+        "it snaps back and doesn't count yet."
+      : "That's your list. Now choose.";
+    panel.innerHTML =
+      picked.map((c) => `<span class="chip">${esc(c.label)}</span>`).join(" ") +
+      ` <button class="primary" data-act="done" ${picked.length < need ? "disabled" : ""}>` +
+      "Done — now choose</button>" +
+      ` <button data-act="undo" ${picked.length ? "" : "disabled"}>Undo</button>`;
+    panel.querySelector('[data-act="done"]').onclick = () => {
+      panel.innerHTML = `<span class="muted">Your list: </span>` +
+        picked.map((c) => `<span class="chip">${esc(c.label)}</span>`).join(" ");
+      done(picked.map((c) => c.uci));
+    };
+    panel.querySelector('[data-act="undo"]').onclick = () => { picked.pop(); paint(); };
+    board.set({ fen: res.fen, flipped: flip, last: res.last_move, check: res.check,
+                dests: picked.length < req.max ? res.dests : {},
+                onMove: (uci) => {
+                  if (!picked.some((c) => c.uci === uci)) {
+                    picked.push({ uci, label: moveLabel(res.fen, uci) });
+                  }
+                  paint();
+                } });
+  };
+  paint();
+}
+function clearCandidates(statusEl) {
+  const el = statusEl.parentElement && statusEl.parentElement.querySelector(".cands");
+  if (el) el.remove();
+}
+function showCandidateGrade(statusEl, g) {
+  if (!g || !g.graded) return;
+  let panel = statusEl.parentElement.querySelector(".cands");
+  if (!panel) {
+    panel = document.createElement("div");
+    panel.className = "cands";
+    statusEl.after(panel);
+  }
+  const tone = { best: "good", good: "good", playable: "", weak: "bad" };
+  panel.innerHTML = `<p class="muted"><b>Your candidates</b> — ${esc(g.note)}</p>` +
+    g.listed.map((c) => `<span class="chip ${tone[c.verdict]}">${esc(c.san)} · ${c.verdict}` +
+      `${c.behind ? ` (−${c.behind})` : ""}</span>`).join(" ") +
+    (g.missed.length ? `<p class="muted">Worth considering too: ` +
+      g.missed.map((m) => esc(m.san)).join(", ") + "</p>" : "");
 }
 
 /* Naming the right move is half a lesson. The other half is the sequence that
@@ -1550,7 +1630,7 @@ $("resign").addEventListener("click", () => wsSend({ type: "resign" }));
 
 /* -------------------------------- PUZZLES ------------------------------- */
 const puzzleBoard = Board($("puzzleBoard"));
-let puz = null, userMoves = [], puzStart = 0, puzPractice = false;
+let puz = null, userMoves = [], puzStart = 0, puzPractice = false, puzCands = null;
 
 async function loadPuzzle() {
   exReset();
@@ -1563,7 +1643,8 @@ async function loadPuzzle() {
     $("puzzleMeta").textContent = "";
     return;
   }
-  puz = r.puzzle; userMoves = []; puzStart = Date.now(); puzPractice = false;
+  puz = r.puzzle; userMoves = []; puzStart = Date.now(); puzPractice = false; puzCands = null;
+  clearCandidates($("puzzleStatus"));
   $("puzzleMeta").textContent = puz.kind === "line"
     ? `${puz.name || "opening line"} · ${r.remaining} due`
     : `${puz.pillar}${puz.motif ? " · " + (puz.motif_label || puz.motif) : ""} · ~${puz.rating} · ` +
@@ -1578,10 +1659,20 @@ async function stepPuzzle(uci) {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ moves: userMoves, auto_first: true,
                            elapsed_ms: Date.now() - puzStart,
-                           practice: puzPractice }),
+                           practice: puzPractice, candidates: puzCands || [] }),
   }).then((x) => x.json());
 
   const flip = res.user_colour === "black";
+  if (res.status === "continue" && res.candidates_required && puzCands === null) {
+    collectCandidates(puzzleBoard, $("puzzleStatus"), res, flip, (list) => {
+      puzCands = list;
+      $("puzzleStatus").textContent = "Now choose your move.";
+      puzzleBoard.set({ fen: res.fen, flipped: flip, last: res.last_move,
+                        check: res.check, dests: res.dests, onMove: stepPuzzle });
+    });
+    return;
+  }
+  showCandidateGrade($("puzzleStatus"), res.candidates);
   if (res.status === "continue") {
     const stm = turnOf(res.fen);
     $("puzzleStatus").textContent =
@@ -1613,6 +1704,11 @@ async function stepPuzzle(uci) {
   $("nextPuzzle").hidden = false;
 }
 $("nextPuzzle").addEventListener("click", loadPuzzle);
+fetch("/api/settings/training").then((x) => x.json()).then((t) => {
+  $("candAll").checked = !!t.candidates_everywhere;
+}).catch(() => {});
+$("candAll").addEventListener("change", (ev) =>
+  post("/api/settings/training", { candidates_everywhere: ev.target.checked }));
 $("skipPuzzle").addEventListener("click", loadPuzzle);
 
 /* ------------------------------- OPENINGS ------------------------------ *
@@ -2093,6 +2189,14 @@ async function loadDashboard() {
       }),
       pillars: rec.motifs.map((m) => m.motif),
     }, "per 100 decisions"));
+  }
+
+  const cs = (d.candidates || {}).all;
+  if (cs && cs.n) {
+    body.insertAdjacentHTML("beforeend",
+      `<p class='muted'>Candidate moves: the best move was on your list ` +
+      `${(cs.found_best_rate * 100).toFixed(0)}% of the time over ${cs.n} puzzles ` +
+      `(list quality ${(cs.avg_score * 100).toFixed(0)}%)</p>`);
   }
 
   // Per-motif puzzle ratings: one number per pattern, so "you find forks at

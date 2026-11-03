@@ -360,6 +360,7 @@ def api_puzzle_attempt(
     elapsed_ms: int | None = Body(default=None),
     hinted: bool = Body(default=False),
     practice: bool = Body(default=False),
+    candidates: list[str] = Body(default_factory=list),
 ) -> JSONResponse:
     """Evaluate an attempt and, when it has resolved, file the SRS review itself.
 
@@ -393,7 +394,20 @@ def api_puzzle_attempt(
         if book:
             result["book"] = True
 
+        from coach.puzzles import candidates as cand
+
+        need = cand.required(p, cand.candidates_everywhere(session))
+        if result["status"] == "continue" and not moves and not practice and need:
+            # Asked for before the first move and graded only once it resolves:
+            # grading the list now would give the answer away.
+            result["candidates_required"] = {"min": cand.MIN_CANDIDATES,
+                                             "max": cand.MAX_CANDIDATES}
+
         resolved = result["status"] in ("solved", "wrong", "alternative")
+        if resolved and candidates and not practice:
+            graded = cand.grade(cand.choosing_board(p, auto_first), candidates)
+            cand.record(session, graded, p.pillar)
+            result["candidates"] = graded
         if resolved and practice:
             result["graded"] = None
             result["practice"] = True
@@ -416,6 +430,29 @@ def api_puzzle_attempt(
                 "your_rating": rating,
             }
         return JSONResponse(result)
+
+
+@app.get("/api/settings/training")
+def api_training_settings() -> JSONResponse:
+    from coach.puzzles import candidates as cand
+
+    Session = session_factory()
+    with Session() as session:
+        return JSONResponse({"candidates_everywhere": cand.candidates_everywhere(session)})
+
+
+@app.post("/api/settings/training")
+def api_training_settings_set(
+    candidates_everywhere: bool | None = Body(default=None, embed=True),
+) -> JSONResponse:
+    from coach.puzzles import candidates as cand
+
+    Session = session_factory()
+    with Session() as session:
+        if candidates_everywhere is not None:
+            cand.set_candidates_everywhere(session, candidates_everywhere)
+        session.commit()
+        return JSONResponse({"candidates_everywhere": cand.candidates_everywhere(session)})
 
 
 @app.post("/api/puzzles/{puzzle_id}/review")
