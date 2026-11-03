@@ -148,3 +148,11 @@ def test_library_import_speaks_our_vocabulary(tmp_path):
         p = s.query(Puzzle).one()
         assert p.motif == "fork"
         assert p.opponent_first
+
+
+def test_quiet_move_needs_a_tactic_behind_it():
+    # 1.e4 as "best" in the start position is not a quiet *tactical* move.
+    board = chess.Board()
+    tags = detect_motifs(board, chess.Move.from_uci("a2a3"), chess.Move.from_uci("e2e4"),
+                         parse_line("e2e4 e7e5 g1f3"))
+    assert "quiet-move" not in tags

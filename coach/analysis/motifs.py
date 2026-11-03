@@ -551,11 +551,23 @@ def _missed(board: chess.Board, best: chess.Move,
         threats = _threat_against_us(board)
         if threats and not _threat_against_us_after(after, threats):
             tags.append("defensive-move")
-        elif not any(t in tags for t in ("fork", "pin", "skewer", "discovered-attack",
-                                         "discovered-check", "trapped-piece", "advanced-pawn",
-                                         "mate-in-1", "mate-in-2", "mate-in-3", "mate-long")):
+        elif _quiet_then_forcing(boards, line) and not any(
+                t in tags for t in ("fork", "pin", "skewer", "discovered-attack",
+                                    "discovered-check", "trapped-piece", "advanced-pawn")):
+            # Only a quiet move *inside a tactic* - the line goes on to win
+            # material or mate by force. Without that condition the tag fired on
+            # half of all mistakes in a test library: "the best move was not a
+            # capture" describes most positions, not a pattern.
             tags.append("quiet-move")
     return tags
+
+
+def _quiet_then_forcing(boards: list[chess.Board], line: list[chess.Move]) -> bool:
+    if boards[-1].is_checkmate():
+        return True
+    if len(line) < 3 or len(boards) < 4:
+        return False
+    return _wins_material(boards[2], line[2]) or boards[3].is_check()
 
 
 def _threatens(after: chess.Board, sq: chess.Square, us: bool) -> bool:

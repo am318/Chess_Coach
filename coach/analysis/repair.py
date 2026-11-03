@@ -191,6 +191,29 @@ def backfill_timing(db_path=None) -> int:
     return filled
 
 
+def sync_puzzle_motifs(db_path=None) -> int:
+    """Copy re-derived motif tags onto the puzzles mined from those moves.
+
+    A puzzle takes its motif from its move once, at mining time. Without this, a
+    classifier change re-tags every move and leaves the puzzles - which are what
+    the per-motif ratings and the variant scheduler read - on the old tags.
+    """
+    Session = session_factory(db_path)
+    changed = 0
+    with Session() as session:
+        rows = session.execute(
+            select(Puzzle, Move.motif)
+            .join(Move, (Move.game_id == Puzzle.game_id) & (Move.ply == Puzzle.ply))
+            .where(Puzzle.source == "own-game")
+        ).all()
+        for puzzle, motif in rows:
+            if puzzle.motif != motif:
+                puzzle.motif = motif
+                changed += 1
+        session.commit()
+    return changed
+
+
 def repair_all(db_path=None, cfg: CoachConfig | None = None, force: bool = False) -> dict:
     """Run every cheap repair, skipping the classifier pass when nothing changed.
 
@@ -206,6 +229,7 @@ def repair_all(db_path=None, cfg: CoachConfig | None = None, force: bool = False
         stored = get_setting(session, _VERSION_KEY, "0") or "0"
     if force or stored != str(CLASSIFIER_VERSION):
         out["reclassified"] = reclassify(db_path, cfg=cfg)
+        out["puzzle_motifs_synced"] = sync_puzzle_motifs(db_path)
         with Session() as session:
             set_setting(session, _VERSION_KEY, str(CLASSIFIER_VERSION))
             session.commit()
