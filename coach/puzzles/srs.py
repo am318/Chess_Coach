@@ -320,6 +320,13 @@ def motif_summary(session: Session) -> list[dict]:
 def ensure_card(session: Session, puzzle: Puzzle) -> SrsCard:
     if puzzle.srs is not None:
         return puzzle.srs
+    # A card created earlier in this session by id does not populate the
+    # relationship, so `puzzle.srs` can read None for a card that exists - and
+    # a second insert then trips the unique constraint.
+    if puzzle.id is not None:
+        existing = session.scalar(select(SrsCard).where(SrsCard.puzzle_id == puzzle.id))
+        if existing is not None:
+            return existing
     card = SrsCard(puzzle_id=puzzle.id, due_at=_now())
     session.add(card)
     session.flush()

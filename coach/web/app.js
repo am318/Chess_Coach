@@ -492,7 +492,8 @@ async function nextTodayPuzzle() {
   $("tpMeta").textContent = tpPuz.kind === "line"
     ? `${tpDone + 1}/${tpTarget} · ${tpPuz.name || "your line"}`
     : `${tpDone + 1}/${tpTarget} · ${tpPuz.pillar}` +
-      `${tpPuz.motif ? " · " + (tpPuz.motif_label || tpPuz.motif) : ""} · ~${tpPuz.rating} · you ${r.your_rating}`;
+      `${tpPuz.motif ? " · " + (tpPuz.motif_label || tpPuz.motif) : ""} · ~${tpPuz.rating} · you ${r.your_rating}` +
+      (tpPuz.variant_of ? " · new position, same idea" : "");
   stepTodayPuzzle(null);
 }
 
@@ -1653,6 +1654,7 @@ async function loadPuzzle() {
     ? `${puz.name || "opening line"} · ${r.remaining} due`
     : `${puz.pillar}${puz.motif ? " · " + (puz.motif_label || puz.motif) : ""} · ~${puz.rating} · ` +
       `you ${r.your_rating} · ${r.remaining} due` +
+      (puz.variant_of ? " · new position, same idea" : "") +
       (puz.kind === "punish" ? " · punish the mistake" : "");
   await stepPuzzle(null);
 }
@@ -2202,6 +2204,12 @@ async function loadDashboard() {
       `<p class='muted'>Calculation — rating ${calcS.rating}, now training ${calcS.depth} moves deep: ` +
       calcRows.map(([dd, v]) => `${dd} deep ${(v.rate * 100).toFixed(0)}% (n=${v.n})`).join(" · ") +
       "</p>");
+  }
+  const tr = (d.transfer || {}).all;
+  if (tr && tr.n) {
+    body.insertAdjacentHTML("beforeend",
+      `<p class='muted'>Same idea, new position: you solved ${(tr.rate * 100).toFixed(0)}% ` +
+      `of ${tr.n} transfer tests — the number that says the pattern stuck, not the board.</p>`);
   }
   const cs = (d.candidates || {}).all;
   if (cs && cs.n) {

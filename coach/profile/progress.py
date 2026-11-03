@@ -189,7 +189,16 @@ def dashboard(account: str | None = None, db_path=None) -> dict:
         "motif_ratings": _motif_ratings(db_path),
         "candidates": _candidates(db_path),
         "calculation": _calculation(db_path),
+        "transfer": _transfer(db_path),
     }
+
+
+def _transfer(db_path=None) -> dict:
+    from coach.puzzles.variants import summary
+
+    Session = session_factory(db_path)
+    with Session() as session:
+        return summary(session)
 
 
 def _calculation(db_path=None) -> dict:

@@ -163,9 +163,16 @@ def _cmd_puzzles(args) -> None:
         n = mine_all(account=args.account, user_elo=args.elo)
         print(f"mined {n} new puzzles from your games")
     elif args.action == "import-lichess":
-        from coach.puzzles.library import import_lichess_csv
+        from coach.puzzles.library import import_lichess_csv, weak_motifs
 
-        n = import_lichess_csv(args.file, user_elo=args.elo, band=args.band)
+        want = weak_motifs() if args.weak_motifs else None
+        if want is not None and not want:
+            print("no weak motifs measured yet - importing across all themes")
+            want = None
+        elif want:
+            print("importing for: " + ", ".join(sorted(want)))
+        n = import_lichess_csv(args.file, user_elo=args.elo, band=args.band,
+                               want_motifs=want)
         print(f"imported {n} library puzzles")
     elif args.action == "stats":
         from sqlalchemy import func
@@ -263,6 +270,9 @@ def main(argv: list[str] | None = None) -> None:
     p_pz.add_argument("--account", default=None)
     p_pz.add_argument("--elo", type=int, default=1500)
     p_pz.add_argument("--band", type=int, default=300)
+    p_pz.add_argument("--weak-motifs", action="store_true",
+                      help="import-lichess: only puzzles for your weakest patterns, so "
+                           "'same idea, new position' reviews have material to draw on")
     p_pz.set_defaults(func=_cmd_puzzles)
 
     p_dr = sub.add_parser("drills", help="endgame technique set + repertoire lines")

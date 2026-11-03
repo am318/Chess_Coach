@@ -332,6 +332,7 @@ def _puzzle_json(p: Puzzle) -> dict:
         "pillar": p.pillar,
         "motif": p.motif,
         "motif_label": _motif_label(p.motif),
+        "variant_of": p.variant_of,
         "kind": p.kind,
         "rating": p.rating_est,
         "source": p.source,
@@ -422,6 +423,15 @@ def api_puzzle_attempt(
             # leaves the rating that picks puzzle difficulty alone.
             rating = (srs.puzzle_rating(session) if book
                       else srs.update_puzzle_rating(session, p, solved))
+            if not book:
+                from coach.puzzles import variants
+
+                if p.variant_of:
+                    result["transfer"] = True
+                variants.record_transfer(session, p, solved)
+                sib = variants.maybe_schedule(session, p, card, grade)
+                if sib is not None:
+                    result["variant_scheduled"] = True
             session.commit()
             result["graded"] = {
                 "grade": grade,

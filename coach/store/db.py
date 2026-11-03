@@ -154,6 +154,10 @@ class Puzzle(Base):
     # plays it before handing the board over. Used by Lichess-style puzzles and by
     # black repertoire lines, which necessarily start with White's first move.
     opponent_first: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Set while this puzzle is standing in as a new position for an idea the
+    # player has already solved elsewhere, so its result reads as a transfer
+    # test (see `puzzles/variants.py`). Cleared once answered.
+    variant_of: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     srs: Mapped[SrsCard | None] = relationship(back_populates="puzzle", uselist=False,

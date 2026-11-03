@@ -48,8 +48,15 @@ def import_lichess_csv(
     want_pillars: set[str] | None = None,
     max_per_pillar: int = 400,
     db_path=None,
+    want_motifs: set[str] | None = None,
+    max_per_motif: int = 60,
 ) -> int:
+    """Import a filtered slice. ``want_motifs`` (our tags) narrows the import
+    to puzzles exercising those patterns, at most ``max_per_motif`` each - the
+    way to give the variant scheduler something to draw on for the motifs your
+    own games are thin on."""
     path = Path(path)
+    kept_by_motif: dict[str, int] = {}
     lo, hi = user_elo - band, user_elo + band
     want = want_pillars or {"tactics", "endgame", "positional", "quiet", "opening"}
     kept_by_pillar: dict[str, int] = dict.fromkeys(want, 0)
@@ -73,6 +80,14 @@ def import_lichess_csv(
             pillar = min(pillars)
             if kept_by_pillar.get(pillar, max_per_pillar) >= max_per_pillar:
                 continue
+            ours = from_lichess_themes(themes)
+            if want_motifs is not None:
+                hit = [t for t in ours if t in want_motifs
+                       and kept_by_motif.get(t, 0) < max_per_motif]
+                if not hit:
+                    continue
+                for t in hit:
+                    kept_by_motif[t] = kept_by_motif.get(t, 0) + 1
             if session.query(Puzzle.id).filter_by(external_id=pid).first():
                 continue
 
@@ -84,7 +99,7 @@ def import_lichess_csv(
                 pillar=pillar,
                 # Our own tag vocabulary, so a library fork and a fork mined
                 # from the player's games count as the same pattern.
-                motif=",".join(from_lichess_themes(themes)[:6]) or None,
+                motif=",".join(ours[:6]) or None,
                 opponent_first=True,
                 rating_est=rating,
             )
@@ -95,6 +110,23 @@ def import_lichess_csv(
             added += 1
         session.commit()
     return added
+
+
+def weak_motifs(db_path=None, k: int = 8) -> set[str]:
+    """The motifs worth importing for: lowest-rated in puzzles, then the most
+    expensive in your games."""
+    from coach.profile.weakness_model import latest_profile
+    from coach.puzzles.srs import motif_summary
+
+    out: list[str] = []
+    with session_factory(db_path)() as session:
+        out += [r["motif"] for r in motif_summary(session) if r["vs_overall"] < 0]
+    prof = latest_profile(None) or {}
+    out += [m["key"] for m in prof.get("tactics_motifs") or []]
+    from coach.analysis.motifs import FROM_LICHESS
+
+    allowed = set(FROM_LICHESS.values())
+    return set([m for m in dict.fromkeys(out) if m in allowed][:k])
 
 
 def _has_header(path: Path) -> bool:
