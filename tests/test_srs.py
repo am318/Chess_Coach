@@ -121,3 +121,68 @@ def test_due_queue_targets_the_selection_band(tmp_path):
         s.commit()
         q = srs.due_queue(s, limit=3, candidate_pool=5)
         assert fit.id in [p.id for p in q]
+
+
+def test_each_motif_carries_its_own_rating(tmp_path):
+    from coach.store.db import Puzzle, session_factory, set_setting
+
+    Session = session_factory(tmp_path / "m.db")
+    with Session() as s:
+        set_setting(s, "puzzle_rating", "1500")
+        fork = Puzzle(source="own-game", fen="8/8/8/8/8/8/8/8 w - - 0 1", solution="e2e4",
+                      pillar="tactics", motif="fork", rating_est=1500)
+        defl = Puzzle(source="own-game", fen="8/8/8/8/8/8/8/8 w - - 0 1", solution="e2e4",
+                      pillar="tactics", motif="deflection,back-rank-weak", rating_est=1500)
+        s.add_all([fork, defl])
+        s.flush()
+        for _ in range(5):
+            srs.update_puzzle_rating(s, fork, True)
+            srs.update_puzzle_rating(s, defl, False)
+        ratings = srs.motif_ratings(s)
+        assert ratings["fork"]["r"] > 1500 > ratings["deflection"]["r"]
+        assert ratings["fork"]["n"] == 5
+        # Position descriptions are not patterns the solver found.
+        assert "back-rank-weak" not in ratings
+
+        w = srs.motif_weights(s)
+        assert w["deflection"] > 1.0 >= w["fork"]
+        summary = srs.motif_summary(s)
+        assert summary[0]["motif"] == "deflection"     # weakest first
+        assert summary[0]["label"] == "deflection"
+
+
+def test_queue_leans_towards_the_weakest_motif(tmp_path):
+    from coach.store.db import Puzzle, session_factory, set_setting
+
+    Session = session_factory(tmp_path / "q.db")
+    with Session() as s:
+        set_setting(s, "puzzle_rating", "1500")
+        set_setting(s, "motif_ratings",
+                    '{"fork": {"r": 1700, "n": 20}, "skewer": {"r": 1200, "n": 20}}')
+        for motif in ("fork", "skewer"):
+            p = Puzzle(source="own-game", fen="8/8/8/8/8/8/8/8 w - - 0 1", solution="e2e4",
+                       pillar="tactics", motif=motif, rating_est=1260)
+            s.add(p)
+            s.flush()
+            srs.ensure_card(s, p)
+        s.commit()
+        q = srs.due_queue(s, limit=2)
+        assert q[0].motif == "skewer"
+
+
+def test_drill_labels_in_the_motif_column_get_no_rating(tmp_path):
+    """Endgame drills store their category ("rook") in `motif`, repertoire lines
+    an opening name; neither is a pattern and neither may be rated as one."""
+    from coach.store.db import Puzzle, session_factory, set_setting
+
+    with session_factory(tmp_path / "d.db")() as s:
+        set_setting(s, "puzzle_rating", "1500")
+        eg = Puzzle(source="endgame", fen="8/8/8/8/8/8/8/8 w - - 0 1", solution="",
+                    pillar="endgame", motif="rook", rating_est=1500)
+        line = Puzzle(source="repertoire", fen="8/8/8/8/8/8/8/8 w - - 0 1", solution="e2e4",
+                      pillar="opening", motif="Caro-Kann Defense", rating_est=1500)
+        s.add_all([eg, line])
+        s.flush()
+        srs.update_puzzle_rating(s, eg, True)
+        srs.update_puzzle_rating(s, line, False)
+        assert srs.motif_ratings(s) == {}

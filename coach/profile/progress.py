@@ -22,6 +22,7 @@ from itertools import pairwise
 
 from sqlalchemy import select
 
+from coach.analysis.motifs import label
 from coach.profile.weakness_model import EVIDENCE_SOURCES_EXCLUDED, PILLARS
 from coach.store.db import Game, Move, ProfileSnapshot, session_factory
 
@@ -123,6 +124,7 @@ def motif_recurrence(account: str | None = None, db_path=None, months: int = 12)
         rates = [round(100.0 * counts[mt].get(k, 0) / denom[k], 2) for k in keys]
         series.append({
             "motif": mt,
+            "label": label(mt),
             "rates": rates,
             "total": totals[mt],
             # Positive = happening less often now than at the start of the window.
@@ -184,4 +186,61 @@ def dashboard(account: str | None = None, db_path=None) -> dict:
         "pillar_trends": pillar_trends(account, db_path),
         "sparring_trend": sparring_trend(account, db_path),
         "motif_recurrence": motif_recurrence(account, db_path),
+        "motif_ratings": _motif_ratings(db_path),
+        "candidates": _candidates(db_path),
+        "calculation": _calculation(db_path),
+        "transfer": _transfer(db_path),
+        "sparring_status": _sparring(account, db_path),
+        "cycle": _cycle(account, db_path),
     }
+
+
+def _cycle(account=None, db_path=None) -> dict:
+    from coach.session import cycles
+
+    with session_factory(db_path)() as session:
+        cur = cycles.active(session, account)
+        active = cycles.state(cur) if cur else None
+    return {"active": active, "history": cycles.history(account, db_path)}
+
+
+def _sparring(account=None, db_path=None) -> dict:
+    from coach.profile.rating import sparring_status
+
+    return sparring_status(account, db_path)
+
+
+def _transfer(db_path=None) -> dict:
+    from coach.puzzles.variants import summary
+
+    Session = session_factory(db_path)
+    with Session() as session:
+        return summary(session)
+
+
+def _calculation(db_path=None) -> dict:
+    from coach.puzzles.calculation import summary
+
+    Session = session_factory(db_path)
+    with Session() as session:
+        out = summary(session)
+        session.commit()
+        return out
+
+
+def _candidates(db_path=None) -> dict:
+    from coach.puzzles.candidates import summary
+
+    Session = session_factory(db_path)
+    with Session() as session:
+        return summary(session)
+
+
+def _motif_ratings(db_path=None) -> list[dict]:
+    from coach.puzzles.srs import motif_summary
+
+    Session = session_factory(db_path)
+    with Session() as session:
+        rows = motif_summary(session)
+        session.commit()   # puzzle_rating() may have seeded itself
+    return rows

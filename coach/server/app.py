@@ -100,6 +100,11 @@ def _run_refresh(cfg: CoachConfig) -> None:
             from coach.drills.seed import seed_all
 
             seed_all(account=None)
+            # Optional: score new mistakes with Maia, so the profile can tell
+            # typical-at-your-level from your own. A no-op without lc0.
+            from coach.analysis.human import tag_mistakes
+
+            _REFRESH.update(maia_tagged=tag_mistakes(limit=300))
             build_profile(account=None)
             if not cfg.unified_identity:
                 for u in cfg.all_users:
@@ -290,8 +295,12 @@ def api_puzzle_next(account: str | None = None, speed: str | None = None,
             # A session block asking for a specific pillar gets a hard preference.
             weights = {**weights, pillar: weights.get(pillar, 1.0) * 4.0}
         src = [x for x in (sources or "").split(",") if x] or None
+        # Endgame drills on rungs of the ladder that are not open yet stay out.
+        from coach.drills.ladder import locked_ids
+
+        locked = locked_ids(session)
         queue = srs.due_queue(session, limit=1, pillar_weights=weights, speed=speed,
-                              sources=src)
+                              sources=src, exclude_ids=locked)
         # Counted over the same set the queue drew from, so an eight-minute
         # warm-up no longer reports the whole 1,200-card backlog, and a drill
         # block with eleven positions in existence does not claim 1,257.
@@ -300,7 +309,7 @@ def api_puzzle_next(account: str | None = None, speed: str | None = None,
         # `due_queue`, while `pillar` is a weight. Counting the pillar as a
         # filter would report a smaller number than the block will actually
         # serve, which is the same class of mistake in the other direction.
-        remaining = srs.due_count(session, speed=speed, sources=src)
+        remaining = srs.due_count(session, speed=speed, sources=src, exclude_ids=locked)
         rating = srs.puzzle_rating(session)
         target = srs.selection_rating(session)
         if not queue:
@@ -317,6 +326,13 @@ def api_puzzle_next(account: str | None = None, speed: str | None = None,
         })
 
 
+def _motif_label(motif: str | None) -> str | None:
+    from coach.analysis.motifs import label
+
+    tags = [t for t in (motif or "").split(",") if t]
+    return ", ".join(label(t) for t in tags) or None
+
+
 def _puzzle_json(p: Puzzle) -> dict:
     return {
         "id": p.id,
@@ -324,6 +340,8 @@ def _puzzle_json(p: Puzzle) -> dict:
         "opponent_first": bool(p.opponent_first) or p.source == "library",
         "pillar": p.pillar,
         "motif": p.motif,
+        "motif_label": _motif_label(p.motif),
+        "variant_of": p.variant_of,
         "kind": p.kind,
         "rating": p.rating_est,
         "source": p.source,
@@ -352,6 +370,7 @@ def api_puzzle_attempt(
     elapsed_ms: int | None = Body(default=None),
     hinted: bool = Body(default=False),
     practice: bool = Body(default=False),
+    candidates: list[str] = Body(default_factory=list),
 ) -> JSONResponse:
     """Evaluate an attempt and, when it has resolved, file the SRS review itself.
 
@@ -385,7 +404,20 @@ def api_puzzle_attempt(
         if book:
             result["book"] = True
 
+        from coach.puzzles import candidates as cand
+
+        need = cand.required(p, cand.candidates_everywhere(session))
+        if result["status"] == "continue" and not moves and not practice and need:
+            # Asked for before the first move and graded only once it resolves:
+            # grading the list now would give the answer away.
+            result["candidates_required"] = {"min": cand.MIN_CANDIDATES,
+                                             "max": cand.MAX_CANDIDATES}
+
         resolved = result["status"] in ("solved", "wrong", "alternative")
+        if resolved and candidates and not practice:
+            graded = cand.grade(cand.choosing_board(p, auto_first), candidates)
+            cand.record(session, graded, p.pillar)
+            result["candidates"] = graded
         if resolved and practice:
             result["graded"] = None
             result["practice"] = True
@@ -400,6 +432,15 @@ def api_puzzle_attempt(
             # leaves the rating that picks puzzle difficulty alone.
             rating = (srs.puzzle_rating(session) if book
                       else srs.update_puzzle_rating(session, p, solved))
+            if not book:
+                from coach.puzzles import variants
+
+                if p.variant_of:
+                    result["transfer"] = True
+                variants.record_transfer(session, p, solved)
+                sib = variants.maybe_schedule(session, p, card, grade)
+                if sib is not None:
+                    result["variant_scheduled"] = True
             session.commit()
             result["graded"] = {
                 "grade": grade,
@@ -408,6 +449,292 @@ def api_puzzle_attempt(
                 "your_rating": rating,
             }
         return JSONResponse(result)
+
+
+@app.get("/api/calc/next")
+def api_calc_next(depth: int | None = None) -> JSONResponse:
+    from coach.puzzles import calculation as calc
+
+    Session = session_factory()
+    with Session() as session:
+        if depth is not None:
+            depth = max(calc.MIN_DEPTH, min(calc.MAX_DEPTH, depth))
+        task = calc.next_task(session, depth)
+        summ = calc.summary(session)
+        session.commit()
+        return JSONResponse({"task": task, "summary": summ})
+
+
+@app.post("/api/calc/{puzzle_id}/check")
+def api_calc_check(
+    puzzle_id: int,
+    line: str = Body(default=""),
+    depth: int = Body(default=2),
+    practice: bool = Body(default=False),
+) -> JSONResponse:
+    """Grade a typed line. Nothing on the board moves until this answers."""
+    from coach.puzzles import calculation as calc
+    from coach.puzzles.solve import stockfish_verifier
+
+    Session = session_factory()
+    with Session() as session:
+        p = session.get(Puzzle, puzzle_id)
+        if p is None:
+            raise HTTPException(404, "puzzle not found")
+        depth = max(calc.MIN_DEPTH, min(calc.MAX_DEPTH, depth))
+        result = calc.check_line(p, line, depth, verifier=stockfish_verifier)
+        if not practice and result["status"] != "unreadable":
+            result["filed"] = calc.record(session, p, result)
+            session.commit()
+        return JSONResponse(result)
+
+
+@app.get("/api/puzzles/{puzzle_id}")
+def api_puzzle_get(puzzle_id: int) -> JSONResponse:
+    Session = session_factory()
+    with Session() as session:
+        p = session.get(Puzzle, puzzle_id)
+        if p is None:
+            raise HTTPException(404, "puzzle not found")
+        return JSONResponse(_puzzle_json(p))
+
+
+@app.get("/api/woodpecker")
+def api_woodpecker() -> JSONResponse:
+    from coach.puzzles import woodpecker as wp
+
+    Session = session_factory()
+    with Session() as session:
+        ws = wp.active(session)
+        out = {"set": wp.state(ws) if ws else None, "available": wp.available(session),
+               "min_size": wp.MIN_SIZE, "max_size": wp.MAX_SIZE,
+               "default_size": wp.DEFAULT_SIZE}
+        session.commit()
+        return JSONResponse(out)
+
+
+@app.post("/api/woodpecker/start")
+def api_woodpecker_start(size: int = Body(default=150, embed=True)) -> JSONResponse:
+    from coach.puzzles import woodpecker as wp
+
+    Session = session_factory()
+    with Session() as session:
+        if wp.active(session) is not None:
+            raise HTTPException(409, "a set is already in progress")
+        try:
+            ws = wp.build(session, size)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        session.commit()
+        return JSONResponse({"set": wp.state(ws)})
+
+
+@app.post("/api/woodpecker/{set_id}/answer")
+def api_woodpecker_answer(
+    set_id: int,
+    puzzle_id: int = Body(),
+    solved: bool = Body(),
+    elapsed_ms: int | None = Body(default=None),
+) -> JSONResponse:
+    from coach.puzzles import woodpecker as wp
+    from coach.store.db import WoodpeckerSet
+
+    Session = session_factory()
+    with Session() as session:
+        ws = session.get(WoodpeckerSet, set_id)
+        if ws is None or ws.finished_at is not None:
+            raise HTTPException(404, "no such active set")
+        try:
+            st = wp.answer(session, ws, puzzle_id, solved, elapsed_ms)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        session.commit()
+        return JSONResponse({"set": st})
+
+
+@app.post("/api/woodpecker/{set_id}/abandon")
+def api_woodpecker_abandon(set_id: int) -> JSONResponse:
+    from coach.puzzles import woodpecker as wp
+    from coach.store.db import WoodpeckerSet
+
+    Session = session_factory()
+    with Session() as session:
+        ws = session.get(WoodpeckerSet, set_id)
+        if ws is None:
+            raise HTTPException(404, "no such set")
+        ws.finished_at = wp._now()
+        session.commit()
+        return JSONResponse({"ok": True})
+
+
+@app.get("/api/sparring/status")
+def api_sparring_status(account: str | None = None) -> JSONResponse:
+    from coach.profile.rating import sparring_status
+
+    return JSONResponse(sparring_status(account))
+
+
+@app.get("/api/cycle")
+def api_cycle(account: str | None = None) -> JSONResponse:
+    from coach.session import cycles
+
+    with session_factory()() as session:
+        cur = cycles.active(session, account)
+        return JSONResponse({"active": cycles.state(cur) if cur else None,
+                             "history": cycles.history(account)})
+
+
+@app.get("/api/cycle/{cycle_id}/answered")
+def api_cycle_answered(cycle_id: int, phase: str = "pre") -> JSONResponse:
+    import json as _json
+
+    from coach.store.db import FocusCycle
+
+    with session_factory()() as session:
+        cyc = session.get(FocusCycle, cycle_id)
+        if cyc is None:
+            raise HTTPException(404, "no such cycle")
+        tests = _json.loads(cyc.tests or "{}")
+        ans = (tests.get(phase) or {}).get("answers") or {}
+        return JSONResponse({"answered": [int(k) for k in ans]})
+
+
+@app.post("/api/cycle/{cycle_id}/test")
+def api_cycle_test(
+    cycle_id: int,
+    phase: str = Body(),
+    puzzle_id: int = Body(),
+    solved: bool = Body(),
+    elapsed_ms: int | None = Body(default=None),
+) -> JSONResponse:
+    from coach.session import cycles
+    from coach.store.db import FocusCycle
+
+    with session_factory()() as session:
+        cyc = session.get(FocusCycle, cycle_id)
+        if cyc is None or phase not in ("pre", "post"):
+            raise HTTPException(404, "no such cycle test")
+        try:
+            st = cycles.answer(session, cyc, phase, puzzle_id, solved, elapsed_ms)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        report = cycles.maybe_finish(session, cyc) if phase == "post" else None
+        session.commit()
+        return JSONResponse({"cycle": st, "report": report})
+
+
+@app.get("/api/ladder")
+def api_ladder() -> JSONResponse:
+    from sqlalchemy import func, select
+
+    from coach.drills.endgames import ENDGAMES
+    from coach.drills.ladder import status
+    from coach.drills.seed import seed_endgames
+
+    with session_factory()() as session:
+        have = session.scalar(select(func.count(Puzzle.id)).where(Puzzle.source == "endgame"))
+    if (have or 0) < len(ENDGAMES):
+        seed_endgames()   # new positions reach an existing database without a refresh
+    with session_factory()() as session:
+        return JSONResponse(status(session))
+
+
+@app.post("/api/ladder/testout/cancel")
+def api_ladder_testout_cancel() -> JSONResponse:
+    from coach.drills.ladder import cancel_testout
+
+    with session_factory()() as session:
+        cancel_testout(session)
+        session.commit()
+        return JSONResponse({"ok": True})
+
+
+@app.post("/api/ladder/testout/{rung}")
+def api_ladder_testout(rung: int) -> JSONResponse:
+    from coach.drills.ladder import start_testout
+
+    with session_factory()() as session:
+        try:
+            out = start_testout(session, rung)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        session.commit()
+        return JSONResponse(out)
+
+
+@app.get("/api/structures")
+def api_structures(account: str | None = None) -> JSONResponse:
+    from coach.openings import structures as st
+
+    account = default_account(_cfg(), account)
+    with session_factory()() as session:
+        stats = st.quiz_stats(session)
+    return JSONResponse({
+        "structures": [{**st.lesson(s.key), "quiz": stats.get(s.key)} for s in st.STRUCTURES],
+        "profile": st.profile(account),
+    })
+
+
+@app.get("/api/structures/{key}/quiz")
+def api_structure_quiz(key: str, account: str | None = None) -> JSONResponse:
+    import random
+
+    from coach.openings import structures as st
+
+    if key not in st.BY_KEY:
+        raise HTTPException(404, "no such structure")
+    account = default_account(_cfg(), account)
+    rng = random.Random()
+    with session_factory()() as session:
+        ex = st.example_position(session, key, account, rng)
+    # The side to judge from: yours in the example game, or either at random.
+    is_owner = (ex["owner"] is None or ex["owner"] == ex["colour"]) if ex else rng.random() < 0.5
+    q = st.quiz(key, is_owner, rng)
+    return JSONResponse({"key": key, "name": st.BY_KEY[key].name, "example": ex,
+                         "is_owner": is_owner, "role": q["role"], "options": q["options"]})
+
+
+@app.post("/api/structures/{key}/answer")
+def api_structure_answer(
+    key: str,
+    is_owner: bool = Body(),
+    choice: str = Body(),
+) -> JSONResponse:
+    from coach.openings import structures as st
+
+    if key not in st.BY_KEY:
+        raise HTTPException(404, "no such structure")
+    s = st.BY_KEY[key]
+    right = s.owner_plan if is_owner else s.against_plan
+    correct = choice.strip() == right
+    with session_factory()() as session:
+        row = st.record_quiz(session, key, correct)
+        session.commit()
+    return JSONResponse({"correct": correct, "right": right, "lesson": st.lesson(key),
+                         "record": row})
+
+
+@app.get("/api/settings/training")
+def api_training_settings() -> JSONResponse:
+    from coach.puzzles import candidates as cand
+
+    Session = session_factory()
+    with Session() as session:
+        return JSONResponse({"candidates_everywhere": cand.candidates_everywhere(session)})
+
+
+@app.post("/api/settings/training")
+def api_training_settings_set(
+    candidates_everywhere: bool | None = Body(default=None, embed=True),
+) -> JSONResponse:
+    from coach.puzzles import candidates as cand
+
+    Session = session_factory()
+    with Session() as session:
+        if candidates_everywhere is not None:
+            cand.set_candidates_everywhere(session, candidates_everywhere)
+        session.commit()
+        return JSONResponse({"candidates_everywhere": cand.candidates_everywhere(session)})
 
 
 @app.post("/api/puzzles/{puzzle_id}/review")
@@ -519,6 +846,7 @@ async def api_drill_move(
     moves_played: int = Body(default=0),
     elapsed_ms: int | None = Body(default=None),
     practice: bool = Body(default=False),
+    testout: bool = Body(default=False),
 ) -> JSONResponse:
     """Apply one move of an endgame drill.
 
@@ -551,6 +879,16 @@ async def api_drill_move(
         step, fen, uci, goal, mode, user_colour, counted
     )
 
+    if result["status"] in ("success", "failed") and testout:
+        # A test-out is a measurement of what is already known: it opens rungs
+        # of the ladder, and leaves the SRS schedule alone.
+        from coach.drills.ladder import record_testout
+
+        with Session() as session:
+            p = session.get(Puzzle, puzzle_id)
+            result["testout"] = record_testout(session, p, result["status"] == "success")
+            session.commit()
+        return JSONResponse(result)
     if result["status"] in ("success", "failed") and not practice:
         with Session() as session:
             p = session.get(Puzzle, puzzle_id)
@@ -656,7 +994,8 @@ def api_session_today(account: str | None = None) -> JSONResponse:
     if existing is not None:
         return JSONResponse({"active": True, **sp.as_dict(existing)})
     # No session yet: show what today would look like without committing to it.
-    return JSONResponse({"active": False, "preview": sp.build_plan(account)})
+    return JSONResponse({"active": False,
+                         "preview": sp.build_plan(account, cycle=sp.cycle_preview(account))})
 
 
 @app.post("/api/session/start")
@@ -989,6 +1328,15 @@ async def ws_play(ws: WebSocket) -> None:
     await ws.accept()
     board = chess.Board()
     opp = SparringOpponent()
+    # Maia is optional: with lc0 and the weights installed (and traps enabled),
+    # the bot sets the traps a player at your level actually falls into.
+    try:
+        from coach.analysis.human import shared as _maia
+
+        if _cfg().maia.sparring_traps:
+            opp.predictor = _maia()
+    except Exception:  # noqa: BLE001 - optional
+        opp.predictor = None
     you = "white"
     elo = 1500
     account = "me"
@@ -1105,14 +1453,16 @@ async def ws_play(ws: WebSocket) -> None:
             else 0.5 if result == "1/2-1/2" else 0.0
         )
         new_elo = None
+        elo_change = None
         if counts and auto_state.get("elo"):
             from coach.profile import rating
-            new_elo = rating.record_result(user_score, prof_acct)
+            elo_change = rating.record_result_detail(user_score, prof_acct)
+            new_elo = elo_change["after"]
         await send({
             "type": "gameover", "result": result, "reason": reason,
             "pgn": _game_pgn(board, start_fen),
             "game_id": gid, "review_pending": gid is not None,
-            "next_elo": new_elo, "counted": counts,
+            "next_elo": new_elo, "elo_change": elo_change, "counted": counts,
             "user_moves": user_plies,
         })
         if gid is not None:

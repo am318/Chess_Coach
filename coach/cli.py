@@ -156,6 +156,21 @@ def _cmd_review(args) -> None:
     print(f"\nFocus next: {r['focus_pillar']}")
 
 
+def _cmd_maia(args) -> None:
+    from coach.analysis import human
+
+    pred = human.shared()
+    if pred is None:
+        print("Maia is not set up: needs lc0 on PATH and maia-*.pb.gz weights "
+              "(see [maia] in coach.example.toml).")
+        return
+    if args.action == "status":
+        print(f"Maia ready: {pred.lc0_path}, weights in {pred.weights_dir}")
+        return
+    n = human.tag_mistakes(predictor=pred, limit=args.limit)
+    print(f"tagged {n} mistakes with how likely a player at your level was to make them")
+
+
 def _cmd_puzzles(args) -> None:
     if args.action == "mine":
         from coach.puzzles.miner import mine_all
@@ -163,9 +178,16 @@ def _cmd_puzzles(args) -> None:
         n = mine_all(account=args.account, user_elo=args.elo)
         print(f"mined {n} new puzzles from your games")
     elif args.action == "import-lichess":
-        from coach.puzzles.library import import_lichess_csv
+        from coach.puzzles.library import import_lichess_csv, weak_motifs
 
-        n = import_lichess_csv(args.file, user_elo=args.elo, band=args.band)
+        want = weak_motifs() if args.weak_motifs else None
+        if want is not None and not want:
+            print("no weak motifs measured yet - importing across all themes")
+            want = None
+        elif want:
+            print("importing for: " + ", ".join(sorted(want)))
+        n = import_lichess_csv(args.file, user_elo=args.elo, band=args.band,
+                               want_motifs=want)
         print(f"imported {n} library puzzles")
     elif args.action == "stats":
         from sqlalchemy import func
@@ -263,12 +285,20 @@ def main(argv: list[str] | None = None) -> None:
     p_pz.add_argument("--account", default=None)
     p_pz.add_argument("--elo", type=int, default=1500)
     p_pz.add_argument("--band", type=int, default=300)
+    p_pz.add_argument("--weak-motifs", action="store_true",
+                      help="import-lichess: only puzzles for your weakest patterns, so "
+                           "'same idea, new position' reviews have material to draw on")
     p_pz.set_defaults(func=_cmd_puzzles)
 
     p_dr = sub.add_parser("drills", help="endgame technique set + repertoire lines")
     p_dr.add_argument("action", nargs="?", default="list", choices=["list", "refresh"])
     p_dr.add_argument("--account", default=None)
     p_dr.set_defaults(func=_cmd_drills)
+
+    p_mx = sub.add_parser("maia", help="optional human-move model via lc0: status | tag")
+    p_mx.add_argument("action", choices=["status", "tag"])
+    p_mx.add_argument("--limit", type=int, default=2000)
+    p_mx.set_defaults(func=_cmd_maia)
 
     p_srv = sub.add_parser("serve")
     p_srv.add_argument("--host", default="0.0.0.0")

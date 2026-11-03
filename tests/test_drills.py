@@ -234,3 +234,10 @@ def test_result_payload_is_renderable(goal):
     for key in ("status", "fen", "user_colour", "played_san", "moves_played", "message"):
         assert key in r
     chess.Board(r["fen"])   # must be a legal FEN
+
+
+def test_a_drill_move_on_an_unparseable_position_is_an_error_not_a_crash():
+    from coach.drills.play import step
+
+    r = step("not a fen", "e2e4", "win", "play-out", "white", 0)
+    assert r["status"] == "error" and "parse" in r["message"]

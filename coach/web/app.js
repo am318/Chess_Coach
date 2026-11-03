@@ -189,6 +189,7 @@ function showView(name) {
   if (name === "review") loadGames();
   if (name === "dashboard") loadDashboard();
   if (name === "today") loadToday();
+  if (name === "train" && window.loadTrain) window.loadTrain();
 }
 // Which session/block the Today stage is currently showing. Re-entering the tab
 // used to re-run the block from scratch: the game in progress was abandoned for
@@ -296,7 +297,13 @@ function renderBlock(block) {
   if (block.kind === "warmup") return startPuzzleBlock(block);
   if (block.kind === "drill") {
     if (block.params.drill === "endgame") return startEndgameBlock(block);
+    if (block.params.drill === "calculation" && window.startCalcBlock) {
+      return window.startCalcBlock(block, blockShell(block.title, block.detail));
+    }
     return startPuzzleBlock(block);      // repertoire lines solve like puzzles
+  }
+  if (block.kind === "test" && window.startTestBlock) {
+    return window.startTestBlock(block, blockShell(block.title, block.detail));
   }
   if (block.kind === "game") return startGameBlock(block);
   if (block.kind === "review") return startReviewBlock(block);
@@ -408,6 +415,7 @@ function blockShell(title, note, keepClock = false) {
 
 /* ---- Today: puzzle blocks (warm-up and drill) ---- */
 let tpBoard = null, tpPuz = null, tpMoves = [], tpStart = 0, tpDone = 0, tpTarget = 10;
+let tpCands = null;   // candidate list for the current puzzle, null until listed
 let tpHinted = false;
 // Set after "Take back": the miss is filed, so the retry must not score or count.
 let tpPractice = false;
@@ -482,11 +490,13 @@ async function nextTodayPuzzle() {
     $("tpNext").onclick = () => advance(blockRecord());
     return;
   }
-  tpPuz = r.puzzle; tpMoves = []; tpStart = Date.now();
+  tpPuz = r.puzzle; tpMoves = []; tpStart = Date.now(); tpCands = null;
+  clearCandidates($("tpStatus"));
   $("tpMeta").textContent = tpPuz.kind === "line"
     ? `${tpDone + 1}/${tpTarget} · ${tpPuz.name || "your line"}`
     : `${tpDone + 1}/${tpTarget} · ${tpPuz.pillar}` +
-      `${tpPuz.motif ? " · " + tpPuz.motif : ""} · ~${tpPuz.rating} · you ${r.your_rating}`;
+      `${tpPuz.motif ? " · " + (tpPuz.motif_label || tpPuz.motif) : ""} · ~${tpPuz.rating} · you ${r.your_rating}` +
+      (tpPuz.variant_of ? " · new position, same idea" : "");
   stepTodayPuzzle(null);
 }
 
@@ -496,10 +506,23 @@ async function stepTodayPuzzle(uci) {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ moves: tpMoves, auto_first: true,
                            elapsed_ms: Date.now() - tpStart, hinted: tpHinted,
-                           practice: tpPractice }),
+                           practice: tpPractice, candidates: tpCands || [] }),
   }).then((x) => x.json());
 
   const flip = res.user_colour === "black";
+  if (res.status === "continue" && res.candidates_required && tpCands === null) {
+    collectCandidates(tpBoard, $("tpStatus"), res, flip, (list) => {
+      tpCands = list;
+      // The clock that grades the solve starts now: listing candidates is a
+      // separate step, and counting it made every such puzzle look slow.
+      tpStart = Date.now();
+      $("tpStatus").textContent = "Now choose your move.";
+      tpBoard.set({ fen: res.fen, flipped: flip, last: res.last_move,
+                    check: res.check, dests: res.dests, onMove: stepTodayPuzzle });
+    });
+    return;
+  }
+  showCandidateGrade($("tpStatus"), res.candidates);
   if (res.status === "continue") {
     $("tpStatus").textContent = uci ? "✓ keep going…"
       : tpPractice ? "Try again — find the move."
@@ -545,6 +568,74 @@ async function stepTodayPuzzle(uci) {
             { convert: res.fen, ideas: res.fen, colour: res.user_colour,
               lastMove: res.last_move });
   finish();
+}
+
+/* Candidate moves first. On quiet and positional puzzles the skill is
+ * generating options, so the player lists two or three moves worth
+ * considering before choosing one. Each candidate is played on the board and
+ * snapped straight back; nothing is sent until the list is done, and the list
+ * is graded only after the puzzle resolves so it can't give the answer away. */
+const PIECE_LETTER = { p: "", n: "N", b: "B", r: "R", q: "Q", k: "K" };
+function moveLabel(fen, uci) {
+  const pc = parseFenBoard(fen)[uci.slice(0, 2)] || "";
+  return `${PIECE_LETTER[pc.toLowerCase()] ?? ""}${uci.slice(0, 2)}–${uci.slice(2, 4)}`;
+}
+function collectCandidates(board, statusEl, res, flip, done) {
+  const req = res.candidates_required;
+  const nLegal = Object.values(res.dests || {}).reduce((a, d) => a + d.length, 0);
+  const need = Math.min(req.min, nLegal);
+  const picked = [];
+  let panel = statusEl.parentElement.querySelector(".cands");
+  if (!panel) {
+    panel = document.createElement("div");
+    panel.className = "cands";
+    statusEl.after(panel);
+  }
+  const paint = () => {
+    statusEl.textContent = picked.length < req.max
+      ? `First, list ${req.min}–${req.max} candidate moves — play each on the board; ` +
+        "it snaps back and doesn't count yet."
+      : "That's your list. Now choose.";
+    panel.innerHTML =
+      picked.map((c) => `<span class="chip">${esc(c.label)}</span>`).join(" ") +
+      ` <button class="primary" data-act="done" ${picked.length < need ? "disabled" : ""}>` +
+      "Done — now choose</button>" +
+      ` <button data-act="undo" ${picked.length ? "" : "disabled"}>Undo</button>`;
+    panel.querySelector('[data-act="done"]').onclick = () => {
+      panel.innerHTML = `<span class="muted">Your list: </span>` +
+        picked.map((c) => `<span class="chip">${esc(c.label)}</span>`).join(" ");
+      done(picked.map((c) => c.uci));
+    };
+    panel.querySelector('[data-act="undo"]').onclick = () => { picked.pop(); paint(); };
+    board.set({ fen: res.fen, flipped: flip, last: res.last_move, check: res.check,
+                dests: picked.length < req.max ? res.dests : {},
+                onMove: (uci) => {
+                  if (!picked.some((c) => c.uci === uci)) {
+                    picked.push({ uci, label: moveLabel(res.fen, uci) });
+                  }
+                  paint();
+                } });
+  };
+  paint();
+}
+function clearCandidates(statusEl) {
+  const el = statusEl.parentElement && statusEl.parentElement.querySelector(".cands");
+  if (el) el.remove();
+}
+function showCandidateGrade(statusEl, g) {
+  if (!g || !g.graded) return;
+  let panel = statusEl.parentElement.querySelector(".cands");
+  if (!panel) {
+    panel = document.createElement("div");
+    panel.className = "cands";
+    statusEl.after(panel);
+  }
+  const tone = { best: "good", good: "good", playable: "", weak: "bad" };
+  panel.innerHTML = `<p class="muted"><b>Your candidates</b> — ${esc(g.note)}</p>` +
+    g.listed.map((c) => `<span class="chip ${tone[c.verdict]}">${esc(c.san)} · ${c.verdict}` +
+      `${c.behind ? ` (−${c.behind})` : ""}</span>`).join(" ") +
+    (g.missed.length ? `<p class="muted">Worth considering too: ` +
+      g.missed.map((m) => esc(m.san)).join(", ") + "</p>" : "");
 }
 
 /* Naming the right move is half a lesson. The other half is the sequence that
@@ -1207,10 +1298,21 @@ async function startReviewBlock(block) {
 /* "Better: Nf3" tells you what to memorise. The line after the move you played
  * tells you why - so both go on every key moment. */
 function refutationHTML(m) {
+  const human = m.human_kind === "typical"
+    ? `<span class="muted">A common mistake at your level — about ${Math.round(m.human_p * 100)}% of ` +
+      `players there play it.</span><br>`
+    : m.human_kind === "personal"
+      ? `<span class="muted">Unusual at your level: under ${Math.max(1, Math.round(m.human_p * 100))}% ` +
+        `of players there would play this. Worth drilling — it's yours.</span><br>`
+      : "";
   const line = m.refutation_san || [];
-  if (!line.length) return "";
+  const st = m.structure
+    ? `<span class="muted">${esc(m.structure.name)} — as ${esc(m.structure.role)}: </span>` +
+      `${esc(m.structure.plan)}<br>`
+    : "";
+  if (!line.length) return st + human;
   return `<span class="muted">yours ran into</span> ` +
-         line.map((san, i) => (i % 2 === 0 ? `<b>${san}</b>` : san)).join(" ") + `<br>`;
+         line.map((san, i) => (i % 2 === 0 ? `<b>${san}</b>` : san)).join(" ") + `<br>` + st + human;
 }
 
 function renderReviewMoments(body, games) {
@@ -1236,7 +1338,7 @@ function renderReviewMoments(body, games) {
       const d = document.createElement("div");
       d.className = "moment";
       d.innerHTML = `<b>${m.move_number}${m.side === "white" ? "." : "…"} ${m.played_san}</b>` +
-        ` −${m.cp_loss}cp · ${m.pillar}${m.motif ? " · " + m.motif : ""}<br>` +
+        ` −${m.cp_loss}cp · ${m.pillar}${m.motif ? " · " + (m.motif_label || m.motif) : ""}<br>` +
         (m.best_san ? `better: <b>${m.best_san}</b> ${(m.best_line_san||[]).slice(1,4).join(" ")}<br>` : "") +
         refutationHTML(m) +
         (m.note ? `<span class="muted">${m.note}</span>` : "");
@@ -1275,6 +1377,11 @@ function renderClose() {
     `<div class="card"><h2>Done for today</h2>` +
     `<p>${puzzles} puzzles · ${drills ? drills + " drills · " : ""}` +
     `${games} game${games === 1 ? "" : "s"} at ${plan.time_control}.</p>` + timing +
+    (() => {
+      const close = (plan.blocks || []).find((b) => b.kind === "close") || {};
+      const r = (close.params || {}).remember;
+      return r ? `<p class="remember"><b>Remember:</b> ${esc(r)}</p>` : "";
+    })() +
     `<p class="muted">Worked on <b>${PILLAR_LABEL[plan.focus_pillar] || plan.focus_pillar}</b>` +
     ` and drilled <b>${plan.secondary_pillar}</b>.</p>` +
     `<p class="muted">Tomorrow's plan is rebuilt from what you just played — the leak that` +
@@ -1465,7 +1572,11 @@ function playMsg(m) {
     rememberGameKey(null);
     const owns = ctxOwnsSession();
     let s = "Game over: " + m.result + " (" + m.reason + ")";
-    if (m.next_elo) s += "  ·  next game ~" + m.next_elo + " Elo";
+    if (m.next_elo) {
+      const ch = (m.elo_change || {}).change;
+      s += "  ·  next game ~" + m.next_elo + " Elo" +
+        (ch ? ` (${ch > 0 ? "+" : ""}${ch}, aiming for you to score ~45%)` : "");
+    }
     // A game abandoned after a move or two is deliberately not filed, rated or
     // analysed; say so rather than leaving the user to wonder where it went.
     if (m.counted === false) s += "  ·  too short to count — not saved or rated";
@@ -1545,7 +1656,7 @@ $("resign").addEventListener("click", () => wsSend({ type: "resign" }));
 
 /* -------------------------------- PUZZLES ------------------------------- */
 const puzzleBoard = Board($("puzzleBoard"));
-let puz = null, userMoves = [], puzStart = 0, puzPractice = false;
+let puz = null, userMoves = [], puzStart = 0, puzPractice = false, puzCands = null;
 
 async function loadPuzzle() {
   exReset();
@@ -1558,11 +1669,13 @@ async function loadPuzzle() {
     $("puzzleMeta").textContent = "";
     return;
   }
-  puz = r.puzzle; userMoves = []; puzStart = Date.now(); puzPractice = false;
+  puz = r.puzzle; userMoves = []; puzStart = Date.now(); puzPractice = false; puzCands = null;
+  clearCandidates($("puzzleStatus"));
   $("puzzleMeta").textContent = puz.kind === "line"
     ? `${puz.name || "opening line"} · ${r.remaining} due`
-    : `${puz.pillar}${puz.motif ? " · " + puz.motif : ""} · ~${puz.rating} · ` +
+    : `${puz.pillar}${puz.motif ? " · " + (puz.motif_label || puz.motif) : ""} · ~${puz.rating} · ` +
       `you ${r.your_rating} · ${r.remaining} due` +
+      (puz.variant_of ? " · new position, same idea" : "") +
       (puz.kind === "punish" ? " · punish the mistake" : "");
   await stepPuzzle(null);
 }
@@ -1573,10 +1686,21 @@ async function stepPuzzle(uci) {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ moves: userMoves, auto_first: true,
                            elapsed_ms: Date.now() - puzStart,
-                           practice: puzPractice }),
+                           practice: puzPractice, candidates: puzCands || [] }),
   }).then((x) => x.json());
 
   const flip = res.user_colour === "black";
+  if (res.status === "continue" && res.candidates_required && puzCands === null) {
+    collectCandidates(puzzleBoard, $("puzzleStatus"), res, flip, (list) => {
+      puzCands = list;
+      puzStart = Date.now();
+      $("puzzleStatus").textContent = "Now choose your move.";
+      puzzleBoard.set({ fen: res.fen, flipped: flip, last: res.last_move,
+                        check: res.check, dests: res.dests, onMove: stepPuzzle });
+    });
+    return;
+  }
+  showCandidateGrade($("puzzleStatus"), res.candidates);
   if (res.status === "continue") {
     const stm = turnOf(res.fen);
     $("puzzleStatus").textContent =
@@ -1608,6 +1732,11 @@ async function stepPuzzle(uci) {
   $("nextPuzzle").hidden = false;
 }
 $("nextPuzzle").addEventListener("click", loadPuzzle);
+fetch("/api/settings/training").then((x) => x.json()).then((t) => {
+  $("candAll").checked = !!t.candidates_everywhere;
+}).catch(() => {});
+$("candAll").addEventListener("change", (ev) =>
+  post("/api/settings/training", { candidates_everywhere: ev.target.checked }));
 $("skipPuzzle").addEventListener("click", loadPuzzle);
 
 /* ------------------------------- OPENINGS ------------------------------ *
@@ -1952,7 +2081,7 @@ function renderReview(r) {
   for (const m of r.key_moments) {
     const d = document.createElement("div"); d.className = "moment";
     d.innerHTML = `<b>${m.move_number}${m.side === "white" ? "." : "…"} ${m.played_san}</b>` +
-      ` −${m.cp_loss}cp · ${m.pillar}${m.motif ? " · " + m.motif : ""}<br>` +
+      ` −${m.cp_loss}cp · ${m.pillar}${m.motif ? " · " + (m.motif_label || m.motif) : ""}<br>` +
       (m.best_san ? `better: ${m.best_san} (${m.best_line_san.join(" ")})<br>` : "") +
       refutationHTML(m) +
       (m.note ? `<span class="muted">${m.note}</span>` : "");
@@ -2039,6 +2168,29 @@ async function loadDashboard() {
     }
   }
 
+  // In-game situations: the habit failures an average can't separate from a
+  // knowledge gap - the same tactic found in a puzzle, missed the move after
+  // winning a piece.
+  const gs = prof.game_state || {};
+  const st = Object.entries(gs.states || {}).filter(([, v]) => v.weight >= 12 && v.blunder_ratio != null);
+  if (st.length) {
+    body.insertAdjacentHTML("beforeend",
+      "<p class='muted'>Blunder rate by situation, against your own baseline</p>");
+    const gx = document.createElement("div"); gx.className = "bars";
+    const maxR = Math.max(...st.map(([, v]) => v.blunder_ratio), 1);
+    st.sort((a, b) => b[1].blunder_ratio - a[1].blunder_ratio);
+    for (const [, v] of st) {
+      const el = document.createElement("div"); el.className = "bar";
+      el.innerHTML = `<i style="width:${(v.blunder_ratio / maxR * 100).toFixed(0)}%"></i>` +
+        `<span>${esc(v.label)} — ${v.blunder_ratio}× your usual blunder rate (n=${v.n})</span>`;
+      gx.appendChild(el);
+    }
+    body.appendChild(gx);
+    if (gs.finding) {
+      body.insertAdjacentHTML("beforeend", `<p class="muted">• ${esc(gs.finding.advice)}</p>`);
+    }
+  }
+
   // Did the drilling work? Recurrence answers that far more legibly than a
   // centipawn curve: the same mistake, counted, month by month.
   const rec = d.motif_recurrence || { motifs: [] };
@@ -2053,7 +2205,7 @@ async function loadDashboard() {
       const dir = m.improvement > 0.3 ? "↓ less often"
                 : m.improvement < -0.3 ? "↑ more often" : "flat";
       el.innerHTML = `<i style="width:${(m.current / maxRate * 100).toFixed(0)}%"></i>` +
-        `<span>${m.motif} — ${m.current}/100 now vs ${m.rates[0]}/100 then · ${dir}</span>`;
+        `<span>${esc(m.label || m.motif)} — ${m.current}/100 now vs ${m.rates[0]}/100 then · ${dir}</span>`;
       rx.appendChild(el);
     }
     body.appendChild(rx);
@@ -2067,10 +2219,85 @@ async function loadDashboard() {
     }, "per 100 decisions"));
   }
 
+  const calcS = d.calculation || {};
+  const calcRows = Object.entries(calcS.by_depth || {});
+  if (calcRows.length) {
+    body.insertAdjacentHTML("beforeend",
+      `<p class='muted'>Calculation — rating ${calcS.rating}, now training ${calcS.depth} moves deep: ` +
+      calcRows.map(([dd, v]) => `${dd} deep ${(v.rate * 100).toFixed(0)}% (n=${v.n})`).join(" · ") +
+      "</p>");
+  }
+  const tr = (d.transfer || {}).all;
+  if (tr && tr.n) {
+    body.insertAdjacentHTML("beforeend",
+      `<p class='muted'>Same idea, new position: you solved ${(tr.rate * 100).toFixed(0)}% ` +
+      `of ${tr.n} transfer tests — the number that says the pattern stuck, not the board.</p>`);
+  }
+  const cs = (d.candidates || {}).all;
+  if (cs && cs.n) {
+    body.insertAdjacentHTML("beforeend",
+      `<p class='muted'>Candidate moves: the best move was on your list ` +
+      `${(cs.found_best_rate * 100).toFixed(0)}% of the time over ${cs.n} puzzles ` +
+      `(list quality ${(cs.avg_score * 100).toFixed(0)}%)</p>`);
+  }
+
+  // Per-motif puzzle ratings: one number per pattern, so "you find forks at
+  // 1700 and miss deflections at 1300" is visible rather than averaged away.
+  const mr = (d.motif_ratings || []).filter((m) => m.n >= 3);
+  if (mr.length) {
+    body.insertAdjacentHTML("beforeend",
+      "<p class='muted'>Puzzle rating by pattern — weakest first</p>");
+    const mx = document.createElement("div"); mx.className = "bars";
+    const top = Math.max(...mr.map((m) => m.rating), 1);
+    for (const m of mr.slice(0, 12)) {
+      const el = document.createElement("div"); el.className = "bar";
+      const rel = m.vs_overall >= 0 ? `+${m.vs_overall}` : `${m.vs_overall}`;
+      el.innerHTML = `<i style="width:${(m.rating / top * 100).toFixed(0)}%"></i>` +
+        `<span>${esc(m.label)} — ${m.rating} (${rel} vs overall, ${m.solved}/${m.n}` +
+        `${m.settled ? "" : ", still settling"})</span>`;
+      mx.appendChild(el);
+    }
+    body.appendChild(mx);
+  }
+
   const trends = d.pillar_trends || { series: [], pillars: [] };
   if (trends.series.length > 1) {
     body.insertAdjacentHTML("beforeend", "<p class='muted'>Pillar avg cp-loss over snapshots</p>");
     body.appendChild(multiLine(trends, "avg cp lost"));
+  }
+  const cyc = d.cycle || {};
+  if (cyc.active) {
+    const a = cyc.active;
+    const pre = (a.tests.pre || {}).score;
+    body.insertAdjacentHTML("beforeend",
+      `<p class='muted'>Focus cycle: <b>${esc(a.label)}</b>, day ${a.day} of ${a.days}` +
+      (pre ? ` · start test ${pre.solved}/${pre.n}` : "") + "</p>");
+  }
+  for (const h of (cyc.history || []).slice(0, 3)) {
+    const r = h.report || {};
+    body.insertAdjacentHTML("beforeend",
+      `<p class='muted'>Cycle on <b>${esc(r.label || h.label)}</b> ` +
+      `(${(r.started || "").slice(0, 10)} – ${(r.ended || "").slice(0, 10)}): ` +
+      esc((r.summary || []).join(" ")) + "</p>");
+  }
+  const hu = prof.human || {};
+  if (hu.typical_share != null) {
+    body.insertAdjacentHTML("beforeend",
+      `<p class='muted'>Of ${hu.tagged} mistakes scored by Maia: ` +
+      `${Math.round(hu.typical_share * 100)}% are common at your level, ` +
+      `${Math.round(hu.personal_share * 100)}% are your own — the ones worth drilling first.</p>`);
+  }
+  const ss = d.sparring_status || {};
+  if (ss.games) {
+    let line = `Sparring bot: ~${ss.elo} Elo after ${ss.games} games, tuned for you to score ` +
+      `${Math.round(ss.target_score * 100)}%` +
+      (ss.recent_score != null ? ` — you've scored ${Math.round(ss.recent_score * 100)}% ` +
+        `over the last ${ss.recent_games}` : "") + ".";
+    if (ss.scale_offset != null && Math.abs(ss.scale_offset) >= 100) {
+      line += ` Its scale reads about ${Math.abs(ss.scale_offset)} points ` +
+        `${ss.scale_offset > 0 ? "low" : "high"} against your online ${ss.online_rating}.`;
+    }
+    body.insertAdjacentHTML("beforeend", `<p class='muted'>${esc(line)}</p>`);
   }
   const sp = (d.sparring_trend || { series: [] }).series;
   if (sp.length) {

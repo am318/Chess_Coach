@@ -76,10 +76,18 @@ def _material(board: chess.Board) -> int:
     )
 
 
+# Maia-informed traps (only with a predictor).
+TRAP_PROB = 0.5          # fraction of moves on which traps are looked for
+TRAP_CANDIDATES = 3
+TRAP_P = 0.35            # the reply must be this likely for a human at the level
+TRAP_CP = 150            # ... and lose at least this against the best reply
+TRAP_NODES = 20_000
+
+
 class SparringOpponent:
     def __init__(self, target_elo: int = 1500, weak_pillar: str | None = None,
                  style: str = "solid", seed: int | None = None,
-                 backend: RootScorer | None = None) -> None:
+                 backend: RootScorer | None = None, predictor=None) -> None:
         self.target_elo = target_elo
         self.weak_pillar = weak_pillar
         self.style = style  # "solid" | "provocative" | "gambit"
@@ -90,6 +98,9 @@ class SparringOpponent:
         # (the tests, the calibration) is used as given.
         self._backend: RootScorer | None = backend
         self._rng = random.Random(seed)
+        # Optional Maia predictor (analysis/human.py): when set, the bot leans
+        # towards moves whose most likely *human* reply is a mistake.
+        self.predictor = predictor
 
     @property
     def backend(self) -> RootScorer:
@@ -163,7 +174,41 @@ class SparringOpponent:
         provoking = self.style in ("provocative", "gambit") and self._rng.random() < 0.55
         pool, weights = self.move_distribution(board, ranked, s, slip=slip,
                                                provoking=provoking)
+        if self.predictor is not None and len(pool) > 1 and self._rng.random() < TRAP_PROB:
+            weights = self._trap_weights(board, pool, weights)
         return self._rng.choices([m for m, _ in pool], weights=weights, k=1)[0]
+
+    def _trap_weights(self, board: chess.Board, pool, weights) -> list[float]:
+        """Boost candidates whose likeliest human reply is a mistake.
+
+        Only the few most likely candidates are probed, at a small budget: a trap
+        is a reply that loses at least TRAP_CP against the best reply, played
+        with Maia probability at least TRAP_P by a player at the bot's level -
+        which, by construction of the adaptive Elo, is the player's level.
+        """
+        order = sorted(range(len(pool)), key=lambda i: -weights[i])[:TRAP_CANDIDATES]
+        out = list(weights)
+        for i in order:
+            mv = pool[i][0]
+            after = board.copy(stack=False)
+            after.push(mv)
+            pred = self.predictor.top(after, self.target_elo)
+            if pred is None:
+                continue
+            reply, p = pred
+            if p < TRAP_P:
+                continue
+            try:
+                replies = self.backend.score_roots(after, TRAP_NODES, limit=8)
+            except Exception:  # noqa: BLE001, S112 - a trap probe never breaks a move
+                continue
+            if not replies:
+                continue
+            best = replies[0][1]
+            got = next((cp for m, cp in replies if m == reply), None)
+            if got is None or best - got >= TRAP_CP:
+                out[i] *= 1.0 + 1.5 * p
+        return out
 
     def _provocation_score(self, board: chess.Board, move: chess.Move) -> float:
         """0..~1: how 'offbeat / against the opening rules' this move is, among

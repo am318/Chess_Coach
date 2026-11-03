@@ -24,6 +24,7 @@ from __future__ import annotations
 import chess
 
 from coach.analysis.classify import detect_motifs
+from coach.analysis.motifs import LABEL as MOTIF_LABELS
 
 # Exploration is interactive, so these are sized for a reply that lands inside a
 # human pause rather than for analysis-grade accuracy. 150k nodes of Stockfish
@@ -59,14 +60,7 @@ _PIECE_NAME = {
     chess.ROOK: "rook", chess.QUEEN: "queen", chess.KING: "king",
 }
 
-MOTIF_LABEL = {
-    "hangs-piece": "leaves a piece hanging",
-    "wins-exchange": "wins the exchange",
-    "fork": "forks two pieces",
-    "pawn-fork": "pawn fork",
-    "back-rank-weak": "back rank is weak",
-    "moved-pinned-piece": "moves a pinned piece",
-}
+MOTIF_LABEL = MOTIF_LABELS
 
 
 def _parse(fen: str) -> chess.Board | None:

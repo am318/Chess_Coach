@@ -232,8 +232,14 @@ def clamp_minutes(minutes: int | None) -> int:
     return max(MIN_SESSION_MINUTES, min(MAX_SESSION_MINUTES, m))
 
 
-def build_plan(account: str | None = None, minutes: int = DEFAULT_MINUTES) -> dict:
-    """The whole curriculum decision for one session, as plain data."""
+def build_plan(account: str | None = None, minutes: int = DEFAULT_MINUTES,
+               cycle: dict | None = None) -> dict:
+    """The whole curriculum decision for one session, as plain data.
+
+    ``cycle`` is the focus cycle in force (``cycles.state`` plus an optional
+    ``test_block``): it fixes the main pillar for its two weeks, and on its
+    first and last days the warm-up becomes the cycle's test.
+    """
     minutes = clamp_minutes(minutes)
     profile = latest_profile(account) or latest_profile(None)
     scale = minutes / DEFAULT_MINUTES
@@ -248,9 +254,10 @@ def build_plan(account: str | None = None, minutes: int = DEFAULT_MINUTES) -> di
     # at all is exactly the wrong outcome. Every SLOW_DAY_EVERY-th session the
     # game block trains the slow weakness instead, and the drill picks up the
     # fast one.
-    primary = ranked[0]
+    focus = (cycle or {}).get("pillar")
+    primary = focus or ranked[0]
     slow_day = rotation % SLOW_DAY_EVERY == SLOW_DAY_EVERY - 1
-    if slow_day:
+    if slow_day and primary not in _SLOW_PILLARS:
         slow = next((p for p in ranked if p in _SLOW_PILLARS), None)
         if slow:
             primary = slow
@@ -269,9 +276,22 @@ def build_plan(account: str | None = None, minutes: int = DEFAULT_MINUTES) -> di
 
     solve_s = _observed_solve_seconds()
     secondary = _second_focus(ranked, primary, game.time_control.speed)
+    if focus and primary != focus:
+        # A slow day moved the game off the cycle's pillar; the drill keeps it.
+        secondary = focus
     drill_kind, drill_detail, drill_sources = _DRILL_FOR.get(
         secondary, ("puzzles", "Mixed puzzles from your own games", ["own-game"])
     )
+    # Every other tactics drill is calculation rather than recognition: the same
+    # kind of position, but the whole line typed before anything moves. Seeing
+    # the first move of a tactic is the easy half.
+    if secondary == "tactics" and rotation % 2 == 1:
+        drill_kind, drill_detail, drill_sources = (
+            "calculation",
+            ("Calculate the whole line before you move: type your moves and their "
+             "best replies, then check it"),
+            ["own-game", "library"],
+        )
 
     blocks = [
         Block(
@@ -336,18 +356,24 @@ def build_plan(account: str | None = None, minutes: int = DEFAULT_MINUTES) -> di
             title="Close",
             minutes=mins["close"],
             detail="One thing to remember, and tomorrow's focus.",
-            params={},
+            params={"remember": remember(profile)},
         ),
     ]
 
+    test = (cycle or {}).get("test_block")
+    if test:
+        blocks[0] = Block(**{**test, "minutes": max(test["minutes"], mins["warmup"])})
+
     return {
+        "cycle": ({k: cycle.get(k) for k in ("id", "pillar", "label", "day", "days",
+                                            "pending_test")} if cycle else None),
         "minutes": sum(b.minutes for b in blocks),
         "focus_pillar": primary,
         "secondary_pillar": secondary,
         "time_control": game.time_control.key,
         "speed": game.time_control.speed,
         "blocks": [asdict(b) for b in blocks],
-        "notes": _notes(profile, primary, secondary, game),
+        "notes": _notes(profile, primary, secondary, game, cycle),
         "generated_at": datetime.now(UTC).isoformat(),
     }
 
@@ -359,8 +385,46 @@ def _game_detail(game: GamePlan) -> str:
     return note[:1].upper() + note[1:] if note else game.why
 
 
-def _notes(profile: dict | None, primary: str, secondary: str, game: GamePlan) -> list[str]:
+def remember(profile: dict | None) -> str | None:
+    """The one sentence the close block hands back.
+
+    A habit beats a fact here: it is the thing that can change in tomorrow's
+    games without any study. So the in-game situation finding comes first, then
+    time allocation, then the most expensive recurring motif.
+    """
+    profile = profile or {}
+    found = (profile.get("game_state") or {}).get("finding")
+    if found:
+        return (f"You blunder {found['blunder_ratio']:.1f}x as often on "
+                f"{found['label']}. {found['advice']}")
+    ta = profile.get("time_allocation") or {}
+    ratio = ta.get("allocation_ratio")
+    if ratio is not None and ratio < 0.95:
+        return ("You spend less time on the positions that decide the game than on "
+                "quiet ones. When something is en prise or a check is on, stop and look.")
+    motifs = profile.get("tactics_motifs") or []
+    if motifs:
+        from coach.analysis.motifs import label
+
+        return f"Your most expensive pattern lately: {label(motifs[0]['key'])}."
+    return None
+
+
+def _notes(profile: dict | None, primary: str, secondary: str, game: GamePlan,
+           cycle: dict | None = None) -> list[str]:
     notes: list[str] = []
+    if cycle and cycle.get("proposed"):
+        notes.append(
+            f"Starting today: a {cycle['days']}-day focus on {cycle['label'].lower()}. "
+            "If there are enough positions for it, the session opens with a short test, "
+            "so the two weeks have something to be measured against."
+        )
+    elif cycle:
+        notes.append(
+            f"Focus cycle: {cycle['label'].lower()}, day {cycle['day']} of {cycle['days']}. "
+            "The main pillar holds for the whole cycle so it gets a run of days; "
+            "a test at each end measures what changed."
+        )
     # Said first, because it qualifies everything after it. A plan built on a
     # library whose newest game is months old is still the best plan available,
     # but the app should not present it as a reading of how you are playing now.
@@ -396,6 +460,11 @@ def _notes(profile: dict | None, primary: str, secondary: str, game: GamePlan) -
         )
     elif missing:
         notes.append("Little or no history at: " + ", ".join(missing) + ".")
+    if primary == "tactics":
+        notes.append(
+            "Tactics is today's focus. For pattern speed on top of the daily hour, a "
+            "Woodpecker cycle (Train, then Cycle) drills one fixed set faster each pass."
+        )
     notes.append(f"Second weakness covered by the drill block: {secondary}.")
     return notes
 
@@ -462,7 +531,7 @@ def start_session(account: str | None = None, minutes: int = DEFAULT_MINUTES) ->
     if existing is not None:
         return as_dict(existing)
 
-    plan = build_plan(account, clamp_minutes(minutes))
+    plan = build_plan(account, clamp_minutes(minutes), cycle=_cycle_for_session(account))
     _bump_rotation()
     Session = session_factory()
     with Session() as s:
@@ -477,6 +546,50 @@ def start_session(account: str | None = None, minutes: int = DEFAULT_MINUTES) ->
         s.add(ts)
         s.commit()
         return as_dict(ts)
+
+
+def _cycle_for_session(account: str | None) -> dict | None:
+    """Close a cycle whose two weeks are up, start one if none is running, and
+    return it in the shape `build_plan` takes."""
+    from coach.session import cycles
+
+    profile = latest_profile(account) or latest_profile(None)
+    Session = session_factory()
+    with Session() as s:
+        cur = cycles.active(s, account)
+        if cur is not None and cycles.maybe_finish(s, cur) is not None:
+            s.commit()
+            cur = None
+        cur = cur or cycles.ensure(s, _ranked_pillars(profile) if profile else [], account)
+        if cur is None:
+            return None
+        st = cycles.state(cur)
+        if st["pending_test"]:
+            st["test_block"] = cycles.test_block(cur, st["pending_test"])
+        s.commit()
+        return st
+
+
+def cycle_preview(account: str | None) -> dict | None:
+    """The cycle a preview should show, without starting one."""
+    from coach.session import cycles
+
+    with session_factory()() as s:
+        cur = cycles.active(s, account)
+        if cur is None:
+            # Nothing running yet: starting the session will open one on the top
+            # pillar, so the preview says so instead of showing a different plan
+            # from the one the Start button is about to produce.
+            profile = latest_profile(account) or latest_profile(None)
+            if not profile or not profile.get("ranked_weaknesses"):
+                return None
+            pillar = _ranked_pillars(profile)[0]
+            return {"proposed": True, "pillar": pillar, "label": cycles.PILLAR_LABEL.get(pillar, pillar),
+                    "day": 1, "days": cycles.CYCLE_DAYS, "pending_test": None, "id": None}
+        st = cycles.state(cur)
+        if st["pending_test"]:
+            st["test_block"] = cycles.test_block(cur, st["pending_test"])
+        return st
 
 
 def as_dict(ts: TrainingSession) -> dict:

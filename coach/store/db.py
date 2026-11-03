@@ -115,6 +115,10 @@ class Move(Base):
     # contributes a cp_loss of 0 that dilutes every average it lands in; this
     # weight lets the profile average over decisions rather than over moves.
     decision_w: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Maia (optional): how likely a human at the player's rating was to play
+    # this move, and the move such a player would most likely have chosen.
+    human_p: Mapped[float | None] = mapped_column(Float, nullable=True)
+    human_top: Mapped[str | None] = mapped_column(String(6), nullable=True)
 
     game: Mapped[Game] = relationship(back_populates="moves")
 
@@ -154,6 +158,10 @@ class Puzzle(Base):
     # plays it before handing the board over. Used by Lichess-style puzzles and by
     # black repertoire lines, which necessarily start with White's first move.
     opponent_first: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Set while this puzzle is standing in as a new position for an idea the
+    # player has already solved elsewhere, so its result reads as a transfer
+    # test (see `puzzles/variants.py`). Cleared once answered.
+    variant_of: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     srs: Mapped[SrsCard | None] = relationship(back_populates="puzzle", uselist=False,
@@ -250,6 +258,50 @@ class TrainingSession(Base):
     # budget survives a reload or a move from desk to phone - a clock the browser
     # owned would restart every time the page did.
     block_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class FocusCycle(Base):
+    """Two weeks on one pillar, bracketed by a short test.
+
+    The daily plan answers "what is worst today", which is right for one
+    session and wrong for a curriculum: a pillar can rank first on Monday, slip
+    to second on Tuesday from a single game, and never get the run of days it
+    takes to move. A cycle fixes the main pillar for ``CYCLE_DAYS`` and measures
+    the result. JSON columns: the two test sets (parallel forms matched on
+    rating, so the post-test is not the pre-test remembered), their answers,
+    the baseline taken at the start, and the final report.
+    """
+
+    __tablename__ = "focus_cycles"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    pillar: Mapped[str] = mapped_column(String(16))
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    ends_at: Mapped[datetime] = mapped_column(DateTime)
+    tests: Mapped[str] = mapped_column(Text, default="{}")
+    baseline: Mapped[str] = mapped_column(Text, default="{}")
+    report: Mapped[str | None] = mapped_column(Text, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+
+
+class WoodpeckerSet(Base):
+    """A fixed set of puzzles solved in the same order, pass after pass.
+
+    Deliberately outside the SRS: the method works because the set does *not*
+    change, so the patterns are drilled to speed rather than scheduled for
+    retention. ``passes`` is JSON - one entry per pass with its start, end,
+    answered ids, solves and total milliseconds.
+    """
+
+    __tablename__ = "woodpecker_sets"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    puzzle_ids: Mapped[str] = mapped_column(Text)               # JSON list, fixed order
+    passes: Mapped[str] = mapped_column(Text, default="[]")     # JSON list of pass dicts
+    max_passes: Mapped[int] = mapped_column(Integer, default=6)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 def make_engine(db_path: Path | None = None):

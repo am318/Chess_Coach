@@ -37,7 +37,7 @@ class NullNarrator:
                 bits.append("(" + " ".join(moment["best_line_san"][:4]) + ")")
         motif = moment.get("motif")
         if motif:
-            bits.append(f"motif: {motif}")
+            bits.append(f"motif: {moment.get('motif_label') or motif}")
         # The pillar tip is a general lesson about a kind of position, and it is
         # only worth saying when there is no more specific lesson to hand. A move
         # tagged `hangs-piece` that the router filed under `quiet` was being told

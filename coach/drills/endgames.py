@@ -115,6 +115,22 @@ ENDGAMES: list[EndgamePosition] = [
              "endgame.",
     ),
 
+    EndgamePosition(
+        key="outside-passer", name="The outside passed pawn",
+        fen="8/5kpp/8/P7/8/5KPP/8/8 w - - 0 1",
+        goal=WIN, category="king-pawn", rating=1400, mode="play-out",
+        idea="Run the outside passer to drag their king across the board; while it is "
+             "away, your king walks in and eats the pawns on the other side.",
+    ),
+    EndgamePosition(
+        key="triangulation", name="Triangulation",
+        fen="8/8/2k5/1pP5/1P1K4/8/8/8 w - - 0 1",
+        goal=WIN, category="king-pawn", rating=1700, mode="play-out",
+        idea="Lose a move on purpose: walk your king round a triangle of three squares, "
+             "and the same position comes back with the opponent to move - who must "
+             "then give way.",
+    ),
+
     # ----------------------------------------------------------------------- rook
     EndgamePosition(
         key="lucena", name="Lucena position",
@@ -136,6 +152,21 @@ ENDGAMES: list[EndgamePosition] = [
         goal=WIN, category="rook", rating=1400, mode="play-out",
         idea="Rooks belong behind passed pawns - yours and the opponent's. Behind the "
              "pawn the rook gains range as the pawn advances; in front it suffocates.",
+    ),
+
+    EndgamePosition(
+        key="rook-cutoff", name="Cutting the king off",
+        fen="1r6/8/8/8/3P4/3K4/7k/4R3 w - - 0 1",
+        goal=WIN, category="rook", rating=1400, mode="play-out",
+        idea="A defending king cut off from the pawn by a file is out of the game. Keep "
+             "the rook on that file and walk the pawn up with your king beside it.",
+    ),
+    EndgamePosition(
+        key="queen-v-pawn", name="Queen against a pawn on the seventh",
+        fen="8/8/8/8/8/K7/3pk3/7Q w - - 0 1",
+        goal=WIN, category="queen", rating=1600, mode="play-out",
+        idea="Check and pin until their king has to stand in front of its own pawn - "
+             "then use that one free tempo to bring your king a step closer. Repeat.",
     ),
 
     # ---------------------------------------------------------------------- minor

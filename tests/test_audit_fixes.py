@@ -418,3 +418,39 @@ def test_abandoned_games_do_not_accumulate():
     assert len(srv._LIVE_GAMES) <= srv.MAX_LIVE_GAMES
     for i in range(srv.MAX_LIVE_GAMES + 10):
         srv.drop_live_game(f"t-bulk-{i}")
+
+
+def test_repair_carries_new_motif_tags_onto_mined_puzzles(tmp_path):
+    from coach.analysis.repair import sync_puzzle_motifs
+    from coach.store.db import Game, Move, Puzzle, session_factory
+
+    db = tmp_path / "r.db"
+    with session_factory(db)() as s:
+        g = Game(source="lichess", source_id="x", account="me", color="white",
+                 result="win", pgn="")
+        s.add(g)
+        s.flush()
+        s.add(Move(game_id=g.id, ply=5, side="white", is_user_move=True, san="e4",
+                   uci="e2e4", fen_before="", motif="skewer"))
+        s.add(Puzzle(source="own-game", game_id=g.id, ply=5, fen="", solution="e2e4",
+                     pillar="tactics", motif="fork"))
+        s.commit()
+    assert sync_puzzle_motifs(db) == 1
+    with session_factory(db)() as s:
+        assert s.query(Puzzle).one().motif == "skewer"
+
+
+def test_repair_translates_old_raw_lichess_themes(tmp_path):
+    from coach.analysis.repair import sync_puzzle_motifs
+    from coach.store.db import Puzzle, session_factory
+
+    db = tmp_path / "lib.db"
+    with session_factory(db)() as s:
+        s.add(Puzzle(source="library", fen="", solution="e2e4", pillar="tactics",
+                     motif="crushing fork middlegame"))
+        s.add(Puzzle(source="library", fen="", solution="e2e4", pillar="tactics",
+                     motif="skewer"))
+        s.commit()
+    assert sync_puzzle_motifs(db) == 1
+    with session_factory(db)() as s:
+        assert sorted(p.motif for p in s.query(Puzzle)) == ["fork", "skewer"]

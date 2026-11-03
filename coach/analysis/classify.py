@@ -10,13 +10,14 @@ from dataclasses import dataclass
 
 import chess
 
+from coach.analysis.motifs import detect_motifs
 from coach.config import ProfileCfg
 
 # Bumped whenever the tag set or the pillar routing changes, so `repair.py` knows
 # to walk the stored positions again instead of leaving rows classified by rules
 # that no longer exist. v2: pillar routed by error type before phase, plus
-# `decision_w`.
-CLASSIFIER_VERSION = 3
+# `decision_w`. v4: the thirty-motif taxonomy in `motifs.py`, read off the PV.
+CLASSIFIER_VERSION = 4
 
 _PIECE_VAL = {chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3, chess.ROOK: 5, chess.QUEEN: 9}
 
@@ -79,7 +80,8 @@ def _opposite_colored_bishops(board: chess.Board) -> bool:
         chess.square_rank(sqs[1]) + chess.square_file(sqs[1])) % 2
 
 
-def forcingness(board: chess.Board, best_cp: int | None, second_cp: int | None) -> float:
+def forcingness(board: chess.Board, best_cp: int | None, second_cp: int | None,
+                legal: list[chess.Move] | None = None) -> float:
     """0 = dead quiet, 1 = highly forcing.
 
     Combines: is the side to move in check, fraction of legal moves that are
@@ -87,17 +89,32 @@ def forcingness(board: chess.Board, best_cp: int | None, second_cp: int | None) 
     gap is between the best and second-best engine move (a big gap => one move
     really matters => forcing / tactical).
     """
-    legal = list(board.legal_moves)
+    if legal is None:
+        legal = list(board.legal_moves)
     if not legal:
         return 1.0
     score = 0.0
     if board.is_check():
         score += 0.45
 
+    # The term saturates once a third of the moves are captures or checks, so
+    # count the cheap captures first and stop asking `gives_check` - a push and
+    # pop per move, the hottest call in a repair - as soon as it is full.
+    need = -(-len(legal) // 3)          # ceil(n / 3): enough to saturate
     tactical = 0
+    quiet: list[chess.Move] = []
     for mv in legal:
-        if board.is_capture(mv) or board.gives_check(mv):
+        if board.is_capture(mv):
             tactical += 1
+        else:
+            quiet.append(mv)
+    if quiet and tactical < need:
+        maybe = _check_filter(board)
+        for mv in quiet:
+            if tactical >= need:
+                break
+            if maybe(mv) and board.gives_check(mv):
+                tactical += 1
     score += 0.30 * min(1.0, tactical / max(1, len(legal)) * 3)
 
     if len(legal) <= 3:
@@ -108,6 +125,43 @@ def forcingness(board: chess.Board, best_cp: int | None, second_cp: int | None) 
         score += 0.35 * min(1.0, gap / 150.0)
 
     return max(0.0, min(1.0, score))
+
+
+def _check_filter(board: chess.Board):
+    """A cheap necessary condition for "this move gives check".
+
+    `gives_check` is exact but pushes and pops the move; across a repair it is
+    called close to a million times. A move can only check if its piece lands on
+    a square that lines up with the enemy king for that piece type, or if it
+    leaves a line between the king and one of our sliders (a discovery). Moves
+    that pass are still confirmed with `gives_check`, so the answer is unchanged.
+    """
+    us = board.turn
+    king = board.king(not us)
+    if king is None:
+        return lambda mv: True
+    knight = chess.BB_KNIGHT_ATTACKS[king]
+    pawn = chess.BB_PAWN_ATTACKS[not us][king]
+    # Full lines through the king on an empty board. (The *_MASKS tables are
+    # edge-trimmed for magic bitboards, and missed a rook checking from h1.)
+    diag = chess.BB_DIAG_ATTACKS[king][0]
+    straight = chess.BB_RANK_ATTACKS[king][0] | chess.BB_FILE_ATTACKS[king][0]
+    reach = {chess.KNIGHT: knight, chess.PAWN: pawn, chess.BISHOP: diag,
+             chess.ROOK: straight, chess.QUEEN: diag | straight, chess.KING: 0}
+    discover = 0
+    for sq in board.pieces(chess.BISHOP, us) | board.pieces(chess.ROOK, us) | \
+            board.pieces(chess.QUEEN, us):
+        discover |= chess.between(king, sq)
+
+    def maybe(mv: chess.Move) -> bool:
+        if board.is_castling(mv) or board.is_en_passant(mv):
+            return True
+        if discover & chess.BB_SQUARES[mv.from_square]:
+            return True
+        pt = mv.promotion or board.piece_type_at(mv.from_square)
+        return bool(reach.get(pt, -1) & chess.BB_SQUARES[mv.to_square])
+
+    return maybe
 
 
 def tactical_tension(board: chess.Board) -> bool:
@@ -181,7 +235,7 @@ def attack_defence_context(board: chess.Board) -> str:
     return "balanced"
 
 
-def decision_weight(board: chess.Board) -> float:
+def decision_weight(board: chess.Board, n_legal: int | None = None) -> float:
     """How much of a decision this position actually was, 0..1.
 
     A forced recapture and a king walking out of check contribute a cp-loss of
@@ -190,7 +244,7 @@ def decision_weight(board: chess.Board) -> float:
     counted as if they were. Weighting by the number of options ramps from 0 for
     a single legal move to 1 once there are four or more.
     """
-    n = board.legal_moves.count()
+    n = board.legal_moves.count() if n_legal is None else n_legal
     return max(0.0, min(1.0, (n - 1) / 3.0))
 
 
@@ -206,74 +260,6 @@ def error_bucket(cp_loss: int | None, cfg: ProfileCfg) -> str:
     return "ok"
 
 
-def detect_motifs(board: chess.Board, played: chess.Move, best: chess.Move | None) -> list[str]:
-    """Lightweight motif hints for a position where the user went wrong.
-
-    Heuristic, not a solver: flags the tactic the user most likely missed or
-    walked into, based on the position before their move and the engine's best
-    reply.
-    """
-    motifs: list[str] = []
-    stm = board.turn
-
-    # Hanging piece: after the played move, does the opponent have a capture that
-    # wins material by SEE-ish (attacker cheaper than victim, victim undefended)?
-    test = board.copy(stack=False)
-    test.push(played)
-    for mv in test.legal_moves:
-        if not test.is_capture(mv):
-            continue
-        victim = test.piece_type_at(mv.to_square)
-        if victim is None:
-            continue
-        attackers = test.attackers(test.turn, mv.to_square)
-        defenders = test.attackers(not test.turn, mv.to_square)
-        if victim >= chess.KNIGHT and len(defenders) == 0:
-            motifs.append("hangs-piece")
-            break
-        if victim >= chess.ROOK and len(attackers) > len(defenders):
-            motifs.append("wins-exchange")
-            break
-
-    # Fork: the engine's best move attacks >=2 valuable pieces at once.
-    if best is not None:
-        after_best = board.copy(stack=False)
-        after_best.push(best)
-        moved_to = best.to_square
-        piece = after_best.piece_type_at(moved_to)
-        if piece:
-            targets = 0
-            for tsq in after_best.attacks(moved_to):
-                tp = after_best.piece_type_at(tsq)
-                if tp and after_best.color_at(tsq) != stm and tp >= chess.KNIGHT:
-                    targets += 1
-            if targets >= 2:
-                motifs.append("fork")
-            if piece == chess.PAWN and targets >= 2:
-                motifs.append("pawn-fork")
-
-    # Back-rank: king on the back rank boxed in by its own pawns.
-    king_sq = board.king(stm)
-    if king_sq is not None:
-        back = 0 if stm == chess.WHITE else 7
-        if chess.square_rank(king_sq) == back:
-            fwd = 8 if stm == chess.WHITE else -8
-            boxed = all(
-                (0 <= king_sq + fwd + d < 64)
-                and board.piece_type_at(king_sq + fwd + d) == chess.PAWN
-                and board.color_at(king_sq + fwd + d) == stm
-                for d in (-1, 0, 1)
-                if 0 <= chess.square_file(king_sq) + d <= 7
-            )
-            if boxed:
-                motifs.append("back-rank-weak")
-
-    if board.is_pinned(stm, played.from_square):
-        motifs.append("moved-pinned-piece")
-
-    return list(dict.fromkeys(motifs))
-
-
 def classify_move(
     board: chess.Board,
     played: chess.Move,
@@ -282,12 +268,15 @@ def classify_move(
     best_cp: int | None,
     second_cp: int | None,
     cfg: ProfileCfg,
+    best_line: list[chess.Move] | None = None,
+    refutation: list[chess.Move] | None = None,
 ) -> MoveTags:
     phase = game_phase(board)
-    f = forcingness(board, best_cp, second_cp)
+    legal = list(board.legal_moves)
+    f = forcingness(board, best_cp, second_cp, legal)
     bucket = error_bucket(cp_loss, cfg)
     eg = endgame_type(board)
-    motifs = detect_motifs(board, played, best) if bucket in ("mistake", "blunder") else []
+    motifs = detect_motifs(board, played, best, best_line, refutation) if bucket in ("mistake", "blunder") else []
 
     # Pillar routing, decided by what the POSITION was, before what the phase was.
     #
@@ -330,5 +319,5 @@ def classify_move(
         motif=",".join(motifs),
         endgame_type=eg,
         context=attack_defence_context(board),
-        decision_w=round(decision_weight(board), 3),
+        decision_w=round(decision_weight(board, len(legal)), 3),
     )

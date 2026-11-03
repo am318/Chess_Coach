@@ -21,6 +21,7 @@ from sqlalchemy import select
 
 from coach.analysis.annotate import clamped_cp_loss
 from coach.analysis.classify import CLASSIFIER_VERSION, classify_move
+from coach.analysis.motifs import parse_line
 from coach.analysis.timing import compute_seconds_spent
 from coach.config import CoachConfig
 from coach.store.db import Game, Move, Puzzle, get_setting, session_factory, set_setting
@@ -96,7 +97,9 @@ def reclassify(db_path=None, batch: int = 2000, cfg: CoachConfig | None = None) 
                     except ValueError:
                         best = None
                 tags = classify_move(board, played, best, m.cp_loss,
-                                     m.eval_before_cp, m.second_best_cp, prof)
+                                     m.eval_before_cp, m.second_best_cp, prof,
+                                     best_line=parse_line(m.best_line),
+                                     refutation=parse_line(m.refutation_line))
                 motif = tags.motif or None
                 # `punish_miss` is added to the motif string by the analysis pass
                 # and is not re-derivable here, so carry it across rather than
@@ -188,6 +191,38 @@ def backfill_timing(db_path=None) -> int:
     return filled
 
 
+def sync_puzzle_motifs(db_path=None) -> int:
+    """Copy re-derived motif tags onto the puzzles mined from those moves.
+
+    A puzzle takes its motif from its move once, at mining time. Without this, a
+    classifier change re-tags every move and leaves the puzzles - which are what
+    the per-motif ratings and the variant scheduler read - on the old tags.
+    """
+    Session = session_factory(db_path)
+    changed = 0
+    with Session() as session:
+        rows = session.execute(
+            select(Puzzle, Move.motif)
+            .join(Move, (Move.game_id == Puzzle.game_id) & (Move.ply == Puzzle.ply))
+            .where(Puzzle.source == "own-game")
+        ).all()
+        for puzzle, motif in rows:
+            if puzzle.motif != motif:
+                puzzle.motif = motif
+                changed += 1
+        # Library puzzles imported before the shared vocabulary carry Lichess's
+        # raw theme string; translate it so they count as the same patterns.
+        from coach.analysis.motifs import LABEL, from_lichess_themes
+
+        for puzzle in session.scalars(select(Puzzle).where(Puzzle.source == "library")):
+            raw = puzzle.motif or ""
+            if raw and not all(t in LABEL for t in raw.split(",")):
+                puzzle.motif = ",".join(from_lichess_themes(raw.replace(",", " "))[:6]) or None
+                changed += 1
+        session.commit()
+    return changed
+
+
 def repair_all(db_path=None, cfg: CoachConfig | None = None, force: bool = False) -> dict:
     """Run every cheap repair, skipping the classifier pass when nothing changed.
 
@@ -206,6 +241,10 @@ def repair_all(db_path=None, cfg: CoachConfig | None = None, force: bool = False
         with Session() as session:
             set_setting(session, _VERSION_KEY, str(CLASSIFIER_VERSION))
             session.commit()
+
+    # Cheap, and idempotent: run every time, so puzzles mined or imported under
+    # an older vocabulary catch up without waiting for a classifier bump.
+    out["puzzle_motifs_synced"] = sync_puzzle_motifs(db_path)
 
     from coach.puzzles.miner import PUZZLE_RATING_VERSION
 
