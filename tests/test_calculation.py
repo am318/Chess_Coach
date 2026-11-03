@@ -43,9 +43,11 @@ def test_the_stored_line_solves_strictly():
 def test_stopping_early_or_guessing_their_reply_wrong_fails():
     r = calc.check_line(_puzzle(), "Bxf7+ Ke7", depth=2)
     assert r["status"] == "wrong" and r["plies"][-1]["note"] == "the line stops here"
-    r = calc.check_line(_puzzle(), "Bxf7+ Kd8?? Qxe5", depth=2)
+    # Ke7 is Black's only legal reply; the third ply is where this line goes wrong.
+    r = calc.check_line(_puzzle(), "Bxf7+ Ke7 Bb3", depth=2)
     assert r["status"] == "wrong"
-    assert not r["plies"][1]["ok"] and r["plies"][1]["expected"] == "Ke7"
+    assert r["plies"][1]["ok"] and not r["plies"][2]["ok"]
+    assert r["plies"][2]["expected"] == "Qxe5+"
 
 
 def test_engine_accepted_alternatives_pass_and_bad_replies_do_not():
@@ -103,3 +105,8 @@ def test_calc_api_round_trip(monkeypatch):
     assert t["depth"] == 2
     r = c.post(f"/api/calc/{t['id']}/check", json={"line": "Bxf7+ Ke7 Qxe5+", "depth": 2}).json()
     assert r["status"] == "solved" and r["filed"]["rating"]
+
+
+def test_a_typo_is_handed_back_not_graded():
+    r = calc.check_line(_puzzle(), "Bxf7+ Kxx9 Qxe5", depth=2)
+    assert r["status"] == "unreadable" and r["bad"] == "Kxx9" and r["parsed"] == 1

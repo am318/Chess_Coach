@@ -88,6 +88,11 @@ function CalcUI(host, opts = {}) {
                            { line: R("input").value, depth: task.depth });
     R("check").disabled = false;
     if (!res) return;
+    if (res.status === "unreadable") {
+      R("status").textContent = `${res.message} Fix it and check again — nothing was counted.`;
+      R("input").focus();
+      return;
+    }
     R("input").disabled = true;
     R("check").hidden = true;
     R("next").hidden = false;

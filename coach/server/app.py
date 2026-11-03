@@ -474,7 +474,7 @@ def api_calc_check(
             raise HTTPException(404, "puzzle not found")
         depth = max(calc.MIN_DEPTH, min(calc.MAX_DEPTH, depth))
         result = calc.check_line(p, line, depth, verifier=stockfish_verifier)
-        if not practice:
+        if not practice and result["status"] != "unreadable":
             result["filed"] = calc.record(session, p, result)
             session.commit()
         return JSONResponse(result)

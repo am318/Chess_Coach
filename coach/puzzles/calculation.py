@@ -97,6 +97,12 @@ def check_line(puzzle: Puzzle, text: str, depth: int,
     if needed % 2 == 0:
         needed -= 1          # always end on the player's own move
     moves, bad = parse_san_line(board, text)
+    if bad is not None:
+        # A typo is not a miscalculation: hand it back unfiled so it can be fixed.
+        return {"status": "unreadable", "bad": bad, "parsed": len(moves),
+                "message": (f"Couldn't read '{bad}' as a legal move there"
+                            f"{' (after ' + str(len(moves)) + ' good plies)' if moves else ''}."),
+                "needed": needed, "depth": (needed + 1) // 2}
     b = board.copy(stack=False)
     plies: list[dict] = []
     on_line = True
@@ -107,7 +113,7 @@ def check_line(puzzle: Puzzle, text: str, depth: int,
         want_san = b.san(want) if want is not None and want in b.legal_moves else None
         if i >= len(moves):
             plies.append({"san": None, "ok": False, "mine": mine, "expected": want_san,
-                          "note": "the line stops here" if not bad else f"couldn't read '{bad}'"})
+                          "note": "the line stops here"})
             failed_at = i
             break
         mv = moves[i]
