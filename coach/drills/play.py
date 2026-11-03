@@ -102,7 +102,12 @@ def step(fen: str, uci: str, goal: str, mode: str, user_colour: str,
     ``fen`` is the position before the user's move; ``user_colour`` fixes whose
     result the goal refers to, since the side to move alternates.
     """
-    board = chess.Board(fen)
+    try:
+        board = chess.Board(fen)
+    except ValueError:
+        # The FEN travels in the request; a stale tab or a typo in a curl must
+        # get an answer, not a 500.
+        return {"status": "error", "message": "that position will not parse", "fen": fen}
     side = chess.WHITE if user_colour == "white" else chess.BLACK
 
     try:
