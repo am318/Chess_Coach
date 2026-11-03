@@ -210,6 +210,15 @@ def sync_puzzle_motifs(db_path=None) -> int:
             if puzzle.motif != motif:
                 puzzle.motif = motif
                 changed += 1
+        # Library puzzles imported before the shared vocabulary carry Lichess's
+        # raw theme string; translate it so they count as the same patterns.
+        from coach.analysis.motifs import LABEL, from_lichess_themes
+
+        for puzzle in session.scalars(select(Puzzle).where(Puzzle.source == "library")):
+            raw = puzzle.motif or ""
+            if raw and not all(t in LABEL for t in raw.split(",")):
+                puzzle.motif = ",".join(from_lichess_themes(raw.replace(",", " "))[:6]) or None
+                changed += 1
         session.commit()
     return changed
 
@@ -229,10 +238,13 @@ def repair_all(db_path=None, cfg: CoachConfig | None = None, force: bool = False
         stored = get_setting(session, _VERSION_KEY, "0") or "0"
     if force or stored != str(CLASSIFIER_VERSION):
         out["reclassified"] = reclassify(db_path, cfg=cfg)
-        out["puzzle_motifs_synced"] = sync_puzzle_motifs(db_path)
         with Session() as session:
             set_setting(session, _VERSION_KEY, str(CLASSIFIER_VERSION))
             session.commit()
+
+    # Cheap, and idempotent: run every time, so puzzles mined or imported under
+    # an older vocabulary catch up without waiting for a classifier bump.
+    out["puzzle_motifs_synced"] = sync_puzzle_motifs(db_path)
 
     from coach.puzzles.miner import PUZZLE_RATING_VERSION
 

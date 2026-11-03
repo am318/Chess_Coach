@@ -413,7 +413,13 @@ def remember(profile: dict | None) -> str | None:
 def _notes(profile: dict | None, primary: str, secondary: str, game: GamePlan,
            cycle: dict | None = None) -> list[str]:
     notes: list[str] = []
-    if cycle:
+    if cycle and cycle.get("proposed"):
+        notes.append(
+            f"Starting today: a {cycle['days']}-day focus on {cycle['label'].lower()}. "
+            "If there are enough positions for it, the session opens with a short test, "
+            "so the two weeks have something to be measured against."
+        )
+    elif cycle:
         notes.append(
             f"Focus cycle: {cycle['label'].lower()}, day {cycle['day']} of {cycle['days']}. "
             "The main pillar holds for the whole cycle so it gets a run of days; "
@@ -571,7 +577,15 @@ def cycle_preview(account: str | None) -> dict | None:
     with session_factory()() as s:
         cur = cycles.active(s, account)
         if cur is None:
-            return None
+            # Nothing running yet: starting the session will open one on the top
+            # pillar, so the preview says so instead of showing a different plan
+            # from the one the Start button is about to produce.
+            profile = latest_profile(account) or latest_profile(None)
+            if not profile or not profile.get("ranked_weaknesses"):
+                return None
+            pillar = _ranked_pillars(profile)[0]
+            return {"proposed": True, "pillar": pillar, "label": cycles.PILLAR_LABEL.get(pillar, pillar),
+                    "day": 1, "days": cycles.CYCLE_DAYS, "pending_test": None, "id": None}
         st = cycles.state(cur)
         if st["pending_test"]:
             st["test_block"] = cycles.test_block(cur, st["pending_test"])

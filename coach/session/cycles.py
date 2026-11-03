@@ -27,7 +27,7 @@ import json
 import statistics
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from coach.profile.weakness_model import EVIDENCE_SOURCES_EXCLUDED
@@ -41,6 +41,9 @@ BASELINE_DAYS = 42         # games before the cycle that set the baseline
 MIN_GAME_DECISIONS = 40    # decisions in the pillar before a game-based change is reported
 TEST_SOURCES = ("own-game", "library")
 TEST_MINUTES = 6
+# An end-of-cycle test still owed this long after the cycle ends is waived, so a
+# skipped test cannot hold the next cycle back forever.
+POST_TEST_GRACE_DAYS = 3
 
 PILLAR_LABEL = {
     "opening": "Openings", "tactics": "Tactics", "positional": "Positional understanding",
@@ -72,13 +75,12 @@ def active(session: Session, account: str | None = None) -> FocusCycle | None:
 
 def _test_sets(session: Session, pillar: str) -> tuple[list[int], list[int]]:
     """Two rating-matched sets of unseen positions from the pillar."""
-    q = (select(Puzzle).where(Puzzle.pillar == pillar, Puzzle.source.in_(TEST_SOURCES),
-                              Puzzle.kind != "line"))
-    pool = []
-    for p in session.scalars(q):
-        card = p.srs
-        if card is None or not card.reps:
-            pool.append(p)
+    from coach.store.db import SrsCard
+
+    q = (select(Puzzle).outerjoin(SrsCard, SrsCard.puzzle_id == Puzzle.id)
+         .where(Puzzle.pillar == pillar, Puzzle.source.in_(TEST_SOURCES),
+                Puzzle.kind != "line", or_(SrsCard.id.is_(None), SrsCard.reps == 0)))
+    pool = list(session.scalars(q))
     if len(pool) < 2 * MIN_TEST_SIZE:
         return [], []
     target = puzzle_rating(session) - 120     # a test should be passable, not a wall
@@ -216,7 +218,9 @@ def answer(session: Session, cyc: FocusCycle, phase: str, puzzle_id: int, solved
 def maybe_finish(session: Session, cyc: FocusCycle, now: datetime | None = None) -> dict | None:
     """Close the cycle once its two weeks are up and its post-test (if any) is done."""
     now = now or _now()
-    if now < cyc.ends_at or pending_test(cyc, now) == "post":
+    if now < cyc.ends_at:
+        return None
+    if pending_test(cyc, now) == "post" and now < cyc.ends_at + timedelta(days=POST_TEST_GRACE_DAYS):
         return None
     report = build_report(session, cyc, now)
     cyc.report = json.dumps(report)

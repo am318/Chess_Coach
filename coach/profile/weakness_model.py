@@ -91,8 +91,17 @@ class _Row:
 
 
 def _fetch(session: Session, account: str | None) -> list[_Row]:
+    # Named columns, not whole ORM rows. Loading `Move` objects pulled every
+    # FEN and PV line into memory and through the identity map - 80% of a 5s
+    # profile build on a 600-game library - for fields the profile never reads.
     q = (
-        select(Move, Game)
+        select(
+            Move.cp_loss, Move.error_bucket, Move.pillar, Move.motif, Move.endgame_type,
+            Move.time_trouble, Move.context, Move.punish_miss, Move.decision_w,
+            Move.forcingness, Move.eval_before_cp, Move.second_best_cp, Move.seconds_spent,
+            Game.id.label("gid"), Game.played_at, Game.eco, Game.opening, Game.color,
+            Game.speed,
+        )
         .join(Game, Move.game_id == Game.id)
         .where(
             Move.is_user_move.is_(True),
@@ -103,7 +112,10 @@ def _fetch(session: Session, account: str | None) -> list[_Row]:
     )
     if account:
         q = q.where(Game.account == account)
-    pairs = session.execute(q.order_by(Game.played_at, Game.id, Move.ply)).all()
+    fetched = session.execute(q.order_by(Game.played_at, Game.id, Move.ply)).all()
+    # Each row carries both the move's and the game's fields, so it stands in
+    # for either; `pairs` keeps the (move, game) shape the helpers expect.
+    pairs = [(r, r) for r in fetched]
 
     now = datetime.now(UTC).replace(tzinfo=None)
     # "recent" = the last TREND_WINDOW_GAMES distinct games, by game not by move,
@@ -111,23 +123,23 @@ def _fetch(session: Session, account: str | None) -> list[_Row]:
     game_order: list[int] = []
     seen: set[int] = set()
     for _, g in pairs:
-        if g.id not in seen:
-            seen.add(g.id)
-            game_order.append(g.id)
+        if g.gid not in seen:
+            seen.add(g.gid)
+            game_order.append(g.gid)
     recent_ids = set(game_order[-TREND_WINDOW_GAMES:])
     prior_ids = set(game_order[-2 * TREND_WINDOW_GAMES:-TREND_WINDOW_GAMES])
 
     rows: list[_Row] = []
-    prev: dict[int, Move] = {}
+    prev: dict[int, object] = {}
     medians = _median_seconds(pairs)
     for m, g in pairs:
-        states = _states(m, g, prev.get(g.id), medians.get(g.id))
-        prev[g.id] = m
+        states = _states(m, g, prev.get(g.gid), medians.get(g.gid))
+        prev[g.gid] = m
         age_days = (now - g.played_at).total_seconds() / 86400.0 if g.played_at else 0.0
         weight = 0.5 ** (max(0.0, age_days) / HALF_LIFE_DAYS)
-        if g.id in recent_ids:
+        if g.gid in recent_ids:
             half = "recent"
-        elif g.id in prior_ids:
+        elif g.gid in prior_ids:
             half = "older"
         else:
             half = "archive"
@@ -197,7 +209,7 @@ def _median_seconds(pairs) -> dict[int, float]:
     per: dict[int, list[float]] = defaultdict(list)
     for m, g in pairs:
         if m.seconds_spent is not None:
-            per[g.id].append(float(m.seconds_spent))
+            per[getattr(g, "gid", None) or g.id].append(float(m.seconds_spent))
     out = {}
     for gid, vals in per.items():
         vals.sort()

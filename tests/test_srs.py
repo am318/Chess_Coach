@@ -168,3 +168,21 @@ def test_queue_leans_towards_the_weakest_motif(tmp_path):
         s.commit()
         q = srs.due_queue(s, limit=2)
         assert q[0].motif == "skewer"
+
+
+def test_drill_labels_in_the_motif_column_get_no_rating(tmp_path):
+    """Endgame drills store their category ("rook") in `motif`, repertoire lines
+    an opening name; neither is a pattern and neither may be rated as one."""
+    from coach.store.db import Puzzle, session_factory, set_setting
+
+    with session_factory(tmp_path / "d.db")() as s:
+        set_setting(s, "puzzle_rating", "1500")
+        eg = Puzzle(source="endgame", fen="8/8/8/8/8/8/8/8 w - - 0 1", solution="",
+                    pillar="endgame", motif="rook", rating_est=1500)
+        line = Puzzle(source="repertoire", fen="8/8/8/8/8/8/8/8 w - - 0 1", solution="e2e4",
+                      pillar="opening", motif="Caro-Kann Defense", rating_est=1500)
+        s.add_all([eg, line])
+        s.flush()
+        srs.update_puzzle_rating(s, eg, True)
+        srs.update_puzzle_rating(s, line, False)
+        assert srs.motif_ratings(s) == {}

@@ -78,6 +78,10 @@ def grade(board: chess.Board, listed: list[str], scorer: Scorer | None = None) -
             mv = chess.Move.from_uci(uci)
         except ValueError:
             continue
+        if mv not in board.legal_moves and len(uci) == 4:
+            # The board sends from+to only; a pawn reaching the last rank means
+            # the queen unless the list says otherwise.
+            mv = chess.Move(mv.from_square, mv.to_square, promotion=chess.QUEEN)
         if mv in board.legal_moves and mv not in moves:
             moves.append(mv)
     if not moves:

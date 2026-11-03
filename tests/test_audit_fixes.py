@@ -438,3 +438,19 @@ def test_repair_carries_new_motif_tags_onto_mined_puzzles(tmp_path):
     assert sync_puzzle_motifs(db) == 1
     with session_factory(db)() as s:
         assert s.query(Puzzle).one().motif == "skewer"
+
+
+def test_repair_translates_old_raw_lichess_themes(tmp_path):
+    from coach.analysis.repair import sync_puzzle_motifs
+    from coach.store.db import Puzzle, session_factory
+
+    db = tmp_path / "lib.db"
+    with session_factory(db)() as s:
+        s.add(Puzzle(source="library", fen="", solution="e2e4", pillar="tactics",
+                     motif="crushing fork middlegame"))
+        s.add(Puzzle(source="library", fen="", solution="e2e4", pillar="tactics",
+                     motif="skewer"))
+        s.commit()
+    assert sync_puzzle_motifs(db) == 1
+    with session_factory(db)() as s:
+        assert sorted(p.motif for p in s.query(Puzzle)) == ["fork", "skewer"]

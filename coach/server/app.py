@@ -584,6 +584,21 @@ def api_cycle(account: str | None = None) -> JSONResponse:
                              "history": cycles.history(account)})
 
 
+@app.get("/api/cycle/{cycle_id}/answered")
+def api_cycle_answered(cycle_id: int, phase: str = "pre") -> JSONResponse:
+    import json as _json
+
+    from coach.store.db import FocusCycle
+
+    with session_factory()() as session:
+        cyc = session.get(FocusCycle, cycle_id)
+        if cyc is None:
+            raise HTTPException(404, "no such cycle")
+        tests = _json.loads(cyc.tests or "{}")
+        ans = (tests.get(phase) or {}).get("answers") or {}
+        return JSONResponse({"answered": [int(k) for k in ans]})
+
+
 @app.post("/api/cycle/{cycle_id}/test")
 def api_cycle_test(
     cycle_id: int,
@@ -610,10 +625,16 @@ def api_cycle_test(
 
 @app.get("/api/ladder")
 def api_ladder() -> JSONResponse:
+    from sqlalchemy import func, select
+
+    from coach.drills.endgames import ENDGAMES
     from coach.drills.ladder import status
     from coach.drills.seed import seed_endgames
 
-    seed_endgames()       # new rungs reach an existing database without a refresh
+    with session_factory()() as session:
+        have = session.scalar(select(func.count(Puzzle.id)).where(Puzzle.source == "endgame"))
+    if (have or 0) < len(ENDGAMES):
+        seed_endgames()   # new positions reach an existing database without a refresh
     with session_factory()() as session:
         return JSONResponse(status(session))
 

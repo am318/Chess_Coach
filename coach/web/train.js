@@ -284,8 +284,15 @@ function renderCycle(card, st) {
  * The positions at each end of a two-week focus cycle. Solved in practice
  * mode - a test is a measurement, so it files nothing to the SRS - and each
  * answer is posted to the cycle. No hints, no retries: one look each.       */
-window.startTestBlock = function startTestBlock(block, body) {
-  const ids = [...(block.params.puzzle_ids || [])];
+window.startTestBlock = async function startTestBlock(block, body) {
+  let ids = [...(block.params.puzzle_ids || [])];
+  // A resumed session must not re-ask positions already answered.
+  try {
+    const c = await fetch(`/api/cycle/${block.params.cycle_id}/answered?phase=${block.params.phase}`)
+      .then((x) => x.json());
+    const seen = new Set(c.answered || []);
+    ids = ids.filter((i) => !seen.has(i));
+  } catch (e) { /* older server: ask them all */ }
   let done = 0, solvedN = 0;
   blockRecord = () => ({ puzzles: done });
   body.innerHTML =

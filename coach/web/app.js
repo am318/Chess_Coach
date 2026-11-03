@@ -513,6 +513,9 @@ async function stepTodayPuzzle(uci) {
   if (res.status === "continue" && res.candidates_required && tpCands === null) {
     collectCandidates(tpBoard, $("tpStatus"), res, flip, (list) => {
       tpCands = list;
+      // The clock that grades the solve starts now: listing candidates is a
+      // separate step, and counting it made every such puzzle look slow.
+      tpStart = Date.now();
       $("tpStatus").textContent = "Now choose your move.";
       tpBoard.set({ fen: res.fen, flipped: flip, last: res.last_move,
                     check: res.check, dests: res.dests, onMove: stepTodayPuzzle });
@@ -1690,6 +1693,7 @@ async function stepPuzzle(uci) {
   if (res.status === "continue" && res.candidates_required && puzCands === null) {
     collectCandidates(puzzleBoard, $("puzzleStatus"), res, flip, (list) => {
       puzCands = list;
+      puzStart = Date.now();
       $("puzzleStatus").textContent = "Now choose your move.";
       puzzleBoard.set({ fen: res.fen, flipped: flip, last: res.last_move,
                         check: res.check, dests: res.dests, onMove: stepPuzzle });

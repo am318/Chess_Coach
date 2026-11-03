@@ -258,7 +258,13 @@ def motif_ratings(session: Session) -> dict[str, dict]:
 
 
 def puzzle_motifs(puzzle: Puzzle) -> list[str]:
-    return [m for m in (puzzle.motif or "").split(",") if m and m not in _UNRATED_MOTIFS]
+    """The puzzle's tactical motifs, and only those. Drill sets reuse the motif
+    column for other labels - an endgame's category ("rook"), a repertoire line's
+    opening name - which are not patterns and must not get a rating of their own."""
+    from coach.analysis.motifs import LABEL
+
+    return [m for m in (puzzle.motif or "").split(",")
+            if m in LABEL and m not in _UNRATED_MOTIFS]
 
 
 def update_motif_ratings(session: Session, puzzle: Puzzle, solved: bool,

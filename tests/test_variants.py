@@ -76,3 +76,24 @@ def test_weak_motif_import_filter(tmp_path):
     n = import_lichess_csv(csv, user_elo=1500, db_path=tmp_path / "i.db",
                            want_motifs={"fork"}, max_per_motif=1)
     assert n == 1
+
+
+def test_transfer_tests_are_capped(tmp_path):
+    with session_factory(tmp_path / "cap.db")() as s:
+        orig = _p(s, "fork", 1)
+        card = srs.ensure_card(s, orig)
+        card.reps = 3
+        for g in range(2, 4):
+            _p(s, "fork", g)
+        first = variants.maybe_schedule(s, orig, card, srs.GOOD)
+        assert first is not None
+        # The same original never has two waiting at once.
+        assert variants.maybe_schedule(s, orig, card, srs.GOOD) is None
+        # And there is a ceiling across the library.
+        for i in range(variants.MAX_PENDING):
+            _p(s, "skewer", 100 + i).variant_of = 999
+        other = _p(s, "pin", 50)
+        oc = srs.ensure_card(s, other)
+        oc.reps = 3
+        _p(s, "pin", 51)
+        assert variants.maybe_schedule(s, other, oc, srs.GOOD) is None

@@ -117,3 +117,10 @@ def test_the_everywhere_toggle_round_trips(client):
     assert client.get("/api/settings/training").json()["candidates_everywhere"] is True
     client.post("/api/settings/training", json={"candidates_everywhere": False})
     assert client.get("/api/settings/training").json()["candidates_everywhere"] is False
+
+
+def test_a_promotion_candidate_from_the_board_is_read_as_a_queen():
+    board = chess.Board("8/4P3/8/8/8/8/k7/4K3 w - - 0 1")
+    g = cand.grade(board, ["e7e8", "e1d2"], scorer=fixed_scorer({"e7e8q": 900, "e1d2": 0}))
+    assert [r["uci"] for r in g["listed"]] == ["e7e8q", "e1d2"]
+    assert g["found_best"]

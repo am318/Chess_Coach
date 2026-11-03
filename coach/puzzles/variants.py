@@ -28,6 +28,10 @@ from coach.store.db import Puzzle, SrsCard, get_setting, set_setting
 # Reviews passed before the position is presumed memorised.
 MIN_REPS = 2
 RATING_WINDOW = 250
+# At most this many transfer tests waiting at once. Without a cap every passed
+# review of a well-known card pulled another sibling forward, and a long warm-up
+# could leave the next day's queue full of them.
+MAX_PENDING = 8
 _STATS_KEY = "transfer_stats"
 SOURCES = ("own-game", "library")
 
@@ -79,6 +83,14 @@ def maybe_schedule(session: Session, puzzle: Puzzle, card: SrsCard, grade: int,
     if grade < GOOD or (card.reps or 0) < MIN_REPS or puzzle.source not in SOURCES:
         return None
     now = now or _now()
+    from sqlalchemy import func
+
+    pending = select(func.count(Puzzle.id)).where(Puzzle.variant_of.isnot(None))
+    if (session.scalar(pending) or 0) >= MAX_PENDING:
+        return None
+    # One transfer test per original at a time.
+    if session.scalar(select(Puzzle.id).where(Puzzle.variant_of == puzzle.id).limit(1)):
+        return None
     sib = find_variant(session, puzzle, now)
     if sib is None:
         return None

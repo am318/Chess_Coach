@@ -127,3 +127,28 @@ def test_plan_follows_the_cycle_and_opens_with_its_test(monkeypatch):
     assert any("Focus cycle" in n for n in plan["notes"])
     plan = sp.build_plan(None, 60)
     assert plan["focus_pillar"] == "tactics" and plan["blocks"][0]["kind"] == "warmup"
+
+
+def test_a_skipped_end_test_cannot_hold_the_cycle_open_forever(s):
+    _puzzles(s, 20)
+    cyc = cycles.start(s, "endgame", now=NOW)
+    end = NOW + timedelta(days=cycles.CYCLE_DAYS)
+    assert cycles.pending_test(cyc, end) == "post"
+    assert cycles.maybe_finish(s, cyc, end + timedelta(days=1)) is None      # still owed
+    rep = cycles.maybe_finish(s, cyc, end + timedelta(days=cycles.POST_TEST_GRACE_DAYS))
+    assert rep is not None and rep["post_test"] is None and cyc.finished_at is not None
+
+
+def test_preview_announces_the_cycle_the_start_button_will_open(monkeypatch):
+    from coach.session import plan as sp
+
+    monkeypatch.setattr(sp, "latest_profile", lambda *_a, **_k: {
+        "ranked_weaknesses": [{"pillar": "endgame", "label": "Endgames", "avg_cp_loss": 90,
+                               "blunder_rate": 0.1}]})
+    monkeypatch.setattr(sp, "_rotation", lambda: 0)
+    monkeypatch.setattr(cycles, "active", lambda *_a, **_k: None)
+    cyc = sp.cycle_preview(None)
+    assert cyc["proposed"] and cyc["pillar"] == "endgame"
+    plan = sp.build_plan(None, 60, cycle=cyc)
+    assert any(n.startswith("Starting today") for n in plan["notes"])
+    assert plan["blocks"][0]["kind"] == "warmup"

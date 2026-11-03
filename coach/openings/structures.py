@@ -288,35 +288,62 @@ STRUCTURES: tuple[Structure, ...] = (
 BY_KEY = {s.key: s for s in STRUCTURES}
 
 
-def _pawns(board: chess.Board, color: bool, mirror: bool) -> Pawns:
-    out: Pawns = set()
-    for sq in board.pieces(chess.PAWN, color):
-        f, r = chess.square_file(sq), chess.square_rank(sq) + 1
-        out.add((f, 9 - r if mirror else r))
-    return out
+_PIECE_VALUES = {"n": 3, "b": 3, "r": 5, "q": 9}
 
 
-def _non_pawn(board: chess.Board) -> int:
-    vals = {chess.KNIGHT: 3, chess.BISHOP: 3, chess.ROOK: 5, chess.QUEEN: 9}
-    return sum(v * len(board.pieces(pt, c)) for pt, v in vals.items() for c in chess.COLORS)
+def _parse_fen(fen: str) -> tuple[Pawns, Pawns, int, int]:
+    """(white pawns, black pawns, non-pawn material, fullmove) straight from the
+    FEN string. Building a `chess.Board` per position to read its pawns was most
+    of the cost of profiling a library: tens of thousands of positions."""
+    parts = fen.split()
+    white: Pawns = set()
+    black: Pawns = set()
+    npm = 0
+    for i, row in enumerate(parts[0].split("/")):
+        rank = 8 - i
+        f = 0
+        for ch in row:
+            if ch.isdigit():
+                f += int(ch)
+                continue
+            if ch == "P":
+                white.add((f, rank))
+            elif ch == "p":
+                black.add((f, rank))
+            else:
+                npm += _PIECE_VALUES.get(ch.lower(), 0)
+            f += 1
+    try:
+        fullmove = int(parts[5])
+    except (IndexError, ValueError):
+        fullmove = 1
+    return white, black, npm, fullmove
+
+
+def _mirror(p: Pawns) -> Pawns:
+    return {(f, 9 - r) for f, r in p}
+
+
+def detect_fen(fen: str) -> list[tuple[str, str | None]]:
+    """`detect` on a FEN string, without building a board."""
+    white, black, npm, fullmove = _parse_fen(fen)
+    # The opening proper and bare endings are not where these plans live.
+    if npm < 20 or fullmove < 8:
+        return []
+    views = ((white, black, "white"), (_mirror(black), _mirror(white), "black"))
+    found: list[tuple[str, str | None]] = []
+    for s in STRUCTURES:
+        for own, opp, colour in views:
+            if s.rule(own, opp):
+                found.append((s.key, None if s.symmetric else colour))
+                break
+    return found
 
 
 def detect(board: chess.Board) -> list[tuple[str, str | None]]:
     """(structure key, owner colour) for each structure on the board. The owner
     is "white"/"black", or None for a symmetric structure."""
-    # The opening proper and bare endings are not where these plans live.
-    if _non_pawn(board) < 20 or board.fullmove_number < 8:
-        return []
-    found: list[tuple[str, str | None]] = []
-    for s in STRUCTURES:
-        for owner in (chess.WHITE, chess.BLACK):
-            mirror = owner == chess.BLACK
-            own = _pawns(board, owner, mirror)
-            opp = _pawns(board, not owner, mirror)
-            if s.rule(own, opp):
-                found.append((s.key, None if s.symmetric else ("white" if owner else "black")))
-                break
-    return found
+    return detect_fen(board.fen())
 
 
 def describe_for(key: str, owner: str | None, viewer: str) -> dict:
@@ -357,17 +384,39 @@ def _user_positions(session: Session, account: str | None, limit_games: int = 40
     return session.execute(q.limit(limit_games * 25)).all()
 
 
+_PROFILE_CACHE: dict[tuple, list[dict]] = {}
+
+
+def _library_stamp(session: Session, account: str | None) -> tuple:
+    """Changes whenever an analysed game is added, so the cache can't go stale."""
+    from sqlalchemy import func
+
+    q = select(func.count(Game.id), func.max(Game.id)).where(Game.analyzed.is_(True))
+    if account:
+        q = q.where(Game.account == account)
+    return tuple(session.execute(q).one())
+
+
 def profile(account: str | None = None, db_path=None) -> list[dict]:
-    """How the player does in each structure, as its owner and against it."""
+    """How the player does in each structure, as its owner and against it.
+
+    Cached per library state: it reads every middlegame position the player has
+    reached, and the answer only changes when a new game is analysed."""
     with session_factory(db_path)() as session:
+        key = (str(db_path), account, _library_stamp(session, account))
+        if key in _PROFILE_CACHE:
+            return _PROFILE_CACHE[key]
         rows = _user_positions(session, account)
+    out = _profile_rows(rows)
+    _PROFILE_CACHE.clear()
+    _PROFILE_CACHE[key] = out
+    return out
+
+
+def _profile_rows(rows) -> list[dict]:
     agg: dict[tuple[str, bool], dict] = defaultdict(lambda: {"cp": [], "games": {}})
     for fen, cp, dw, gid, color, result in rows:
-        try:
-            board = chess.Board(fen)
-        except ValueError:
-            continue
-        for key, owner in detect(board):
+        for key, owner in detect_fen(fen):
             is_owner = owner is None or owner == color
             a = agg[(key, is_owner)]
             a["cp"].append((int(cp), 1.0 if dw is None else float(dw)))
@@ -393,16 +442,17 @@ def example_position(session: Session, key: str, account: str | None = None,
                      rng: random.Random | None = None) -> dict | None:
     """A position from the player's own games with this structure."""
     rng = rng or random.Random()
-    rows = _user_positions(session, account)
+    rows = list(_user_positions(session, account))
+    # Scan in random order and stop at a handful of hits: one example is needed,
+    # not every position in the library.
+    rng.shuffle(rows)
     hits = []
     for fen, _cp, _dw, gid, color, _res in rows:
-        try:
-            board = chess.Board(fen)
-        except ValueError:
-            continue
-        for k, owner in detect(board):
+        for k, owner in detect_fen(fen):
             if k == key:
                 hits.append((fen, color, owner, gid))
+        if len(hits) >= 12:
+            break
     if not hits:
         return None
     fen, color, owner, gid = rng.choice(hits)
