@@ -290,8 +290,12 @@ def api_puzzle_next(account: str | None = None, speed: str | None = None,
             # A session block asking for a specific pillar gets a hard preference.
             weights = {**weights, pillar: weights.get(pillar, 1.0) * 4.0}
         src = [x for x in (sources or "").split(",") if x] or None
+        # Endgame drills on rungs of the ladder that are not open yet stay out.
+        from coach.drills.ladder import locked_ids
+
+        locked = locked_ids(session)
         queue = srs.due_queue(session, limit=1, pillar_weights=weights, speed=speed,
-                              sources=src)
+                              sources=src, exclude_ids=locked)
         # Counted over the same set the queue drew from, so an eight-minute
         # warm-up no longer reports the whole 1,200-card backlog, and a drill
         # block with eleven positions in existence does not claim 1,257.
@@ -300,7 +304,7 @@ def api_puzzle_next(account: str | None = None, speed: str | None = None,
         # `due_queue`, while `pillar` is a weight. Counting the pillar as a
         # filter would report a smaller number than the block will actually
         # serve, which is the same class of mistake in the other direction.
-        remaining = srs.due_count(session, speed=speed, sources=src)
+        remaining = srs.due_count(session, speed=speed, sources=src, exclude_ids=locked)
         rating = srs.puzzle_rating(session)
         target = srs.selection_rating(session)
         if not queue:
@@ -599,6 +603,39 @@ def api_cycle_test(
         return JSONResponse({"cycle": st, "report": report})
 
 
+@app.get("/api/ladder")
+def api_ladder() -> JSONResponse:
+    from coach.drills.ladder import status
+    from coach.drills.seed import seed_endgames
+
+    seed_endgames()       # new rungs reach an existing database without a refresh
+    with session_factory()() as session:
+        return JSONResponse(status(session))
+
+
+@app.post("/api/ladder/testout/cancel")
+def api_ladder_testout_cancel() -> JSONResponse:
+    from coach.drills.ladder import cancel_testout
+
+    with session_factory()() as session:
+        cancel_testout(session)
+        session.commit()
+        return JSONResponse({"ok": True})
+
+
+@app.post("/api/ladder/testout/{rung}")
+def api_ladder_testout(rung: int) -> JSONResponse:
+    from coach.drills.ladder import start_testout
+
+    with session_factory()() as session:
+        try:
+            out = start_testout(session, rung)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        session.commit()
+        return JSONResponse(out)
+
+
 @app.get("/api/settings/training")
 def api_training_settings() -> JSONResponse:
     from coach.puzzles import candidates as cand
@@ -731,6 +768,7 @@ async def api_drill_move(
     moves_played: int = Body(default=0),
     elapsed_ms: int | None = Body(default=None),
     practice: bool = Body(default=False),
+    testout: bool = Body(default=False),
 ) -> JSONResponse:
     """Apply one move of an endgame drill.
 
@@ -763,6 +801,16 @@ async def api_drill_move(
         step, fen, uci, goal, mode, user_colour, counted
     )
 
+    if result["status"] in ("success", "failed") and testout:
+        # A test-out is a measurement of what is already known: it opens rungs
+        # of the ladder, and leaves the SRS schedule alone.
+        from coach.drills.ladder import record_testout
+
+        with Session() as session:
+            p = session.get(Puzzle, puzzle_id)
+            result["testout"] = record_testout(session, p, result["status"] == "success")
+            session.commit()
+        return JSONResponse(result)
     if result["status"] in ("success", "failed") and not practice:
         with Session() as session:
             p = session.get(Puzzle, puzzle_id)

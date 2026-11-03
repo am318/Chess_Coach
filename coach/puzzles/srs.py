@@ -342,6 +342,7 @@ def due_queue(
     speed: str | None = None,
     sources: list[str] | None = None,
     candidate_pool: int = 300,
+    exclude_ids: list[int] | None = None,
 ) -> list[Puzzle]:
     """Cards due now, ordered by how much training value they carry today.
 
@@ -375,6 +376,8 @@ def due_queue(
             q = q.where(SrsCard.reps > 0)
         if sources:
             q = q.where(Puzzle.source.in_(sources))
+        if exclude_ids:
+            q = q.where(Puzzle.id.notin_(exclude_ids))
         if use_speed and speed:
             q = q.where(Puzzle.speed == speed)
         if band is not None:
@@ -449,7 +452,7 @@ def new_cards_left(session: Session, now: datetime | None = None) -> int:
 
 def due_count(session: Session, now: datetime | None = None,
               speed: str | None = None, sources: list[str] | None = None,
-              pillar: str | None = None) -> int:
+              pillar: str | None = None, exclude_ids: list[int] | None = None) -> int:
     """How many cards are due, under the same filters the queue was given.
 
     Unfiltered, this reported the whole backlog: an eight-minute warm-up said
@@ -466,6 +469,8 @@ def due_count(session: Session, now: datetime | None = None,
     )
     if sources:
         q = q.where(Puzzle.source.in_(sources))
+    if exclude_ids:
+        q = q.where(Puzzle.id.notin_(exclude_ids))
     if speed:
         q = q.where(Puzzle.speed == speed)
     if pillar:

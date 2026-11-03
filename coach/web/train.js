@@ -338,3 +338,101 @@ window.startTestBlock = function startTestBlock(block, body) {
   }
   load();
 };
+
+/* ------------------------------ ENDGAME LADDER ---------------------------- *
+ * Named technique in the order it builds on itself. A rung opens once every
+ * position below it has been converted or held; a test-out (all of a rung's
+ * positions, first try) opens it and everything beneath it at once.        */
+
+registerTrainMode("ladder", "Endgames", (stage) => renderLadder(stage));
+
+async function renderLadder(stage) {
+  const st = await fetch("/api/ladder").then((x) => x.json());
+  const card = document.createElement("div");
+  card.className = "card";
+  stage.innerHTML = "";
+  stage.appendChild(card);
+  card.innerHTML = `<h2>Endgame ladder</h2>` +
+    `<p class="muted">Each rung opens when you've converted (or held) every position on ` +
+    `the one below. Already know a rung? Test out: pass all of its positions first try ` +
+    `and it opens, along with everything beneath it. Your daily endgame drill only ` +
+    `uses open rungs.</p>` +
+    st.rungs.map((r) => {
+      const mark = r.passed ? "✓" : r.open ? "▸" : "🔒";
+      return `<div class="rung ${r.open ? "" : "locked"}">` +
+        `<p><b>${mark} ${r.index + 1}. ${esc(r.name)}</b> <span class="muted">— ${esc(r.why)}</span></p>` +
+        `<div>` + r.positions.map((p) =>
+          `<button data-play="${p.id}" ${r.open && p.id ? "" : "disabled"}>` +
+          `${p.done ? "✓ " : ""}${esc(p.name)}</button>`).join(" ") +
+        (!r.passed ? ` <button data-testout="${r.index}">Test out</button>` : "") +
+        `</div></div>`;
+    }).join("") + `<div data-r="play"></div>`;
+  const playHost = card.querySelector('[data-r="play"]');
+  card.querySelectorAll("[data-play]").forEach((b) => b.addEventListener("click", () =>
+    playEndgame(playHost, [+b.dataset.play], false, () => renderLadder(stage))));
+  card.querySelectorAll("[data-testout]").forEach((b) => b.addEventListener("click", async () => {
+    const t = await post(`/api/ladder/testout/${b.dataset.testout}`, {});
+    if (!t) return;
+    playEndgame(playHost, t.positions.map((p) => p.id).filter(Boolean), true,
+                () => renderLadder(stage), t.name);
+  }));
+}
+
+/* A small endgame player for the Train tab: plays each drill in `ids` to its
+ * verdict. In a test-out the server records each first result itself. */
+function playEndgame(host, ids, testout, onDone, title = "") {
+  host.innerHTML =
+    `<h3>${testout ? "Test out: " + esc(title) : "Drill"}</h3>` +
+    `<div class="board" data-r="board"></div><div class="status" data-r="status"></div>` +
+    `<p class="muted" data-r="idea"></p>` +
+    `<div class="row"><button class="primary" data-r="next" hidden>Next</button>` +
+    `<button data-r="stop">Back to the ladder</button></div>`;
+  const R = (k) => host.querySelector(`[data-r="${k}"]`);
+  const board = Board(R("board"));
+  let queue = [...ids], cur = null, fen = null, moves = 0, start = 0;
+  host.scrollIntoView({ behavior: "smooth" });
+
+  R("stop").onclick = async () => {
+    if (testout) await post("/api/ladder/testout/cancel", {});
+    onDone();
+  };
+  async function load() {
+    R("next").hidden = true;
+    if (!queue.length) return onDone();
+    cur = queue.shift();
+    const st = await fetch(`/api/drills/endgame/${cur}/start`, { method: "POST" }).then((x) => x.json());
+    fen = st.fen; moves = 0; start = Date.now();
+    R("status").textContent = `${st.name} — ${st.goal === "win" ? "Win this." : "Hold the draw."} ` +
+      "Play it out against the engine.";
+    R("idea").textContent = testout ? "" : (st.idea || "");
+    board.set({ fen: st.fen, flipped: st.user_colour === "black", dests: st.dests, onMove: step });
+  }
+  async function step(uci) {
+    const res = await post(`/api/drills/endgame/${cur}/move`,
+                           { fen, uci, moves_played: moves, elapsed_ms: Date.now() - start,
+                             testout });
+    if (!res) return;
+    if (res.status === "error") { R("status").textContent = "⚠ " + res.message; return; }
+    fen = res.fen; moves = res.moves_played;
+    const flip = res.user_colour === "black";
+    if (res.status === "continue") {
+      R("status").textContent = `${res.played_san} — keep going. (${moves} moves)`;
+      board.set({ fen: res.fen, flipped: flip, last: res.last_move, dests: res.dests, onMove: step });
+      return;
+    }
+    const ok = res.status === "success";
+    board.set({ fen: res.fen, flipped: flip, last: res.last_move, dests: {}, onMove: null });
+    R("status").textContent = (ok ? "✓ " : "✗ ") + res.message;
+    const t = res.testout;
+    if (t && t.finished) {
+      R("status").textContent += t.passed
+        ? "  Test passed — this rung and everything below it are open."
+        : "  That ends the test-out; drill this rung to open it the ordinary way.";
+      queue = [];
+    }
+    R("next").hidden = false;
+    R("next").textContent = queue.length ? "Next position" : "Back to the ladder";
+    R("next").onclick = load;
+  }
+  load();
+}
