@@ -459,17 +459,39 @@ Web API: `/api/accounts`, `/api/profile`, `/api/dashboard`, `/api/games`,
 
 ---
 
+### Training-method additions
+
+- **Motifs are read off the line, and only claimed when it confirms them.** A
+  deflection is a check, the defender leaving, then the capture it guarded; the
+  first move alone can't show it. Tags are cut to six per move, and `quiet-move`
+  needs a forcing win behind it: unconditioned, it fired on half of all mistakes.
+- **Candidate lists are graded after the puzzle resolves.** Grading before the
+  move would give the answer away.
+- **A typo in calculation mode is handed back, not graded.**
+- **Test-outs, cycle tests and Woodpecker passes never touch the SRS.** They are
+  measurement or speed drills; filing them would reschedule cards on evidence of
+  a different kind.
+- **Cycle tests are parallel forms**, dealt alternately in rating order, and the
+  end-of-cycle set is held out of the daily queue until it is needed.
+- **In-game situations are read from before the move**, so (unlike time spent)
+  nothing the player chooses on that move can bias the bucket.
+
 ## 8. Remaining work
 
 - **M6 engine**: numba bitboard movegen (biggest nps lever on 1 core), NNUE eval
   trained on `coach/analysis` Stockfish labels, SPSA/SPRT tuning. Keep classical eval
   as fallback/blend.
-- **`coach/profile/user_model.py`**: small torch `P(move | position)` net on the
-  user's games + style metrics (aggression, trade/push tendency, castling-side
-  variety) → lets sparring anticipate the user and quantifies style drift / narrowness
-  beyond openings.
+- **Human-move model**: Maia via lc0 is wired in (`coach/analysis/human.py`) but
+  has only been tested against a recorded lc0 output format and a fake predictor;
+  run it against a real lc0 + weights and check `parse_policy` and the trap rate.
+  A per-user `P(move | position)` net on top remains an option.
 - **Calibration**: `Strength.for_elo` points and the provocation/breadth probabilities
-  are educated guesses; tune from real bot-vs-user results (auto-adjust target Elo).
+  are educated guesses. `sparring_status()` now measures the bot's scale offset
+  against the player's online rating once 15 games have settled; feed that back
+  into the anchor points.
+- **Endgame ladder**: KBN mate was left out because Stockfish scores it +261 at
+  depth 26, below a reliable adjudication margin; add it once drills can read a
+  tablebase.
 - **Submission tablebases**: 3-4-5 Syzygy is too big for 50 MB; decide on a subset or
   ship without.
 - **LLM review**: wire the narration toggle into the web UI.

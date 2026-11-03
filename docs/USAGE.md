@@ -92,6 +92,37 @@ full-budget search against a quarter-budget one and those numbers are not
 comparable with new ones. `coach calibrate` reports whether the sparring bot is
 the strength it claims to be, measured against the players in the games database.
 
+### Training beyond the hour (the Train tab)
+
+- **Calculate** — the position is shown and nothing moves. Type the whole line,
+  your moves and the replies you expect (`Bxf7+ Ke7 Qxe5+`), then check it. Each
+  ply is checked against the engine, theirs included. Depth grows from two of
+  your moves to four as you get them right. Every other tactics drill in the
+  daily plan is this.
+- **Cycle** — a Woodpecker set: 30–200 tactics from your games, the same order
+  each pass, each pass faster. Separate from the spaced-repetition queue.
+- **Endgames** — the ladder. Seven rungs, each opening once the one below is
+  converted; *Test out* of a rung by passing all its positions first try. The
+  daily endgame drill only uses open rungs.
+- **Structures** — fifteen pawn structures with both sides' plans, a table of how
+  you play in each, and a quiz on positions from your own games.
+
+**Candidates first.** On quiet and positional puzzles you list two or three
+candidate moves before choosing; the list is graded after you move. A checkbox on
+the Puzzles tab turns it on for every puzzle.
+
+**Focus cycles.** The main pillar holds for two weeks. The first session of a
+cycle opens with a short test and the last with a matched one; the report
+compares them, and your real games before and during.
+
+**Same idea, new position.** Once you have passed a puzzle twice, a different
+position with the same motif is pulled forward, from your games or an imported
+Lichess set (`coach puzzles import-lichess FILE --weak-motifs`).
+
+**Maia (optional).** With `lc0` and the Maia weights installed (see `[maia]` in
+`coach.example.toml`), `coach maia tag` scores your mistakes as *common at your
+level* or *your own*, and the sparring bot sets the traps your level falls into.
+
 ### First run
 
 Analysis is the slow part — about 33 s of Stockfish per game at the default

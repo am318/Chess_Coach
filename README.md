@@ -29,6 +29,7 @@ The engine was built for the [AI Chessathon](https://aichessathon.com): pure Pyt
 - **Spaced-repetition puzzles from your own mistakes.** Positions are mined from your games, kept only if the best move is unambiguous (≥80 cp ahead of the second best), graded from outcome and solve time rather than self-assessment, and difficulty-targeted at an 80% success rate. ([`coach/puzzles/`](coach/puzzles))
 - **Endgame drills judged on the result.** A Lucena has several winning moves, so each drill carries a goal (win or hold) and any move that keeps it is accepted, checked by Stockfish rather than against a stored line. ([`coach/drills/`](coach/drills))
 - **Measurement bugs found and fixed, with the reasoning kept.** cp-loss differenced from two searches at the same budget; raw mate scores kept apart from clamped ones so mate puzzles can be mined at all; progress reported as motif recurrence per hundred decisions rather than a noisy average. See the [decisions log](docs/PLAN.md#7-design-decisions).
+- **Training methods from the schools that work.** Thirty Lichess-style motifs with a rating each; candidate moves first on quiet positions; a calculation mode where the whole line is typed before anything moves; Woodpecker cycles; a gated endgame ladder with test-out; two-week focus cycles bracketed by matched tests; "same idea, new position" transfer tests; fifteen pawn structures with their plans; mistakes profiled by in-game situation; optional Maia (via lc0) to tell a mistake typical of your level from one that is yours. ([`coach/puzzles/`](coach/puzzles), [`coach/session/cycles.py`](coach/session/cycles.py), [`coach/drills/ladder.py`](coach/drills/ladder.py), [`coach/openings/structures.py`](coach/openings/structures.py))
 - **Opt-in LLM narration.** Reviews read as plain English from deterministic templates by default. With `COACH_LLM=1` and `ANTHROPIC_API_KEY` set, Claude turns the engine's lines into prose; it never picks a move. ([`coach/coaching/`](coach/coaching))
 
 ## Quick start
@@ -55,8 +56,8 @@ To use your own games instead: `cp coach.example.toml coach.toml`, add your Lich
 | `coach/analysis/` | Stockfish annotation, move classification, derived-field repair. |
 | `coach/profile/` | Weakness model, progress metrics, bot calibration. |
 | `coach/sparring/` | Target-Elo opponent, weakness steering, opening picker. |
-| `coach/puzzles/`, `coach/drills/`, `coach/openings/` | Puzzle miner and solver, SRS scheduler, endgame and repertoire drills, opening trainer. |
-| `coach/session/` | The daily-hour planner: picks blocks, time controls and targets from the profile. |
+| `coach/puzzles/`, `coach/drills/`, `coach/openings/` | Puzzle miner and solver, SRS scheduler, candidates, calculation, Woodpecker, variants; endgame ladder and repertoire drills; opening trainer and pawn structures. |
+| `coach/session/` | The daily-hour planner and two-week focus cycles: picks blocks, time controls and targets from the profile. |
 | `coach/server/`, `coach/web/` | FastAPI backend and a dependency-free browser UI. |
 
 ```
