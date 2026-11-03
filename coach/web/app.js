@@ -302,6 +302,9 @@ function renderBlock(block) {
     }
     return startPuzzleBlock(block);      // repertoire lines solve like puzzles
   }
+  if (block.kind === "test" && window.startTestBlock) {
+    return window.startTestBlock(block, blockShell(block.title, block.detail));
+  }
   if (block.kind === "game") return startGameBlock(block);
   if (block.kind === "review") return startReviewBlock(block);
   if (block.kind === "close") return renderClose();
@@ -2246,6 +2249,21 @@ async function loadDashboard() {
   if (trends.series.length > 1) {
     body.insertAdjacentHTML("beforeend", "<p class='muted'>Pillar avg cp-loss over snapshots</p>");
     body.appendChild(multiLine(trends, "avg cp lost"));
+  }
+  const cyc = d.cycle || {};
+  if (cyc.active) {
+    const a = cyc.active;
+    const pre = (a.tests.pre || {}).score;
+    body.insertAdjacentHTML("beforeend",
+      `<p class='muted'>Focus cycle: <b>${esc(a.label)}</b>, day ${a.day} of ${a.days}` +
+      (pre ? ` · start test ${pre.solved}/${pre.n}` : "") + "</p>");
+  }
+  for (const h of (cyc.history || []).slice(0, 3)) {
+    const r = h.report || {};
+    body.insertAdjacentHTML("beforeend",
+      `<p class='muted'>Cycle on <b>${esc(r.label || h.label)}</b> ` +
+      `(${(r.started || "").slice(0, 10)} – ${(r.ended || "").slice(0, 10)}): ` +
+      esc((r.summary || []).join(" ")) + "</p>");
   }
   const ss = d.sparring_status || {};
   if (ss.games) {

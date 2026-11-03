@@ -191,7 +191,17 @@ def dashboard(account: str | None = None, db_path=None) -> dict:
         "calculation": _calculation(db_path),
         "transfer": _transfer(db_path),
         "sparring_status": _sparring(account, db_path),
+        "cycle": _cycle(account, db_path),
     }
+
+
+def _cycle(account=None, db_path=None) -> dict:
+    from coach.session import cycles
+
+    with session_factory(db_path)() as session:
+        cur = cycles.active(session, account)
+        active = cycles.state(cur) if cur else None
+    return {"active": active, "history": cycles.history(account, db_path)}
 
 
 def _sparring(account=None, db_path=None) -> dict:

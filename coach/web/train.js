@@ -279,3 +279,62 @@ function renderCycle(card, st) {
   };
   load();
 }
+
+/* ------------------------------ CYCLE TEST ------------------------------ *
+ * The positions at each end of a two-week focus cycle. Solved in practice
+ * mode - a test is a measurement, so it files nothing to the SRS - and each
+ * answer is posted to the cycle. No hints, no retries: one look each.       */
+window.startTestBlock = function startTestBlock(block, body) {
+  const ids = [...(block.params.puzzle_ids || [])];
+  let done = 0, solvedN = 0;
+  blockRecord = () => ({ puzzles: done });
+  body.innerHTML =
+    `<div class="board" data-r="board"></div><div class="status" data-r="status"></div>` +
+    `<div class="row"><button class="primary" data-r="next" hidden>Next</button>` +
+    `<span class="muted" data-r="meta"></span></div>`;
+  const R = (k) => body.querySelector(`[data-r="${k}"]`);
+  const board = Board(R("board"));
+  let puzzle = null, moves = [], start = 0;
+
+  async function load() {
+    R("next").hidden = true;
+    if (!ids.length) {
+      R("status").textContent = `Test done: ${solvedN} of ${done}.`;
+      board.set({ dests: {}, onMove: null });
+      R("next").hidden = false;
+      R("next").textContent = "Next block →";
+      R("next").onclick = () => advance({ ...blockRecord(), ended: "count" });
+      return;
+    }
+    puzzle = await fetch(`/api/puzzles/${ids[0]}`).then((x) => x.json());
+    moves = []; start = Date.now();
+    R("meta").textContent = `${done + 1} / ${done + ids.length}`;
+    step(null);
+  }
+  async function step(uci) {
+    if (uci) moves.push(uci);
+    const res = await post(`/api/puzzles/${puzzle.id}/attempt`,
+                           { moves, auto_first: true, practice: true });
+    if (!res) return;
+    const flip = res.user_colour === "black";
+    if (res.status === "continue") {
+      R("status").textContent = uci ? "✓ keep going…" : "Find the best move.";
+      board.set({ fen: res.fen, flipped: flip, last: res.last_move, check: res.check,
+                  dests: res.dests, onMove: step });
+      return;
+    }
+    const solved = res.status === "solved" || res.status === "alternative";
+    await post(`/api/cycle/${block.params.cycle_id}/test`,
+               { phase: block.params.phase, puzzle_id: puzzle.id, solved,
+                 elapsed_ms: Date.now() - start });
+    ids.shift(); done++; if (solved) solvedN++;
+    noteBlockProgress();
+    board.set({ fen: res.fen, flipped: flip, last: res.last_move,
+                hint: solved ? null : res.best_uci, dests: {}, onMove: null });
+    R("status").textContent = solved ? "✓" : `✗ It was ${res.best_san || "the marked move"}.`;
+    R("next").hidden = false;
+    R("next").textContent = "Next";
+    R("next").onclick = load;
+  }
+  load();
+};

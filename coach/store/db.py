@@ -256,6 +256,31 @@ class TrainingSession(Base):
     block_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class FocusCycle(Base):
+    """Two weeks on one pillar, bracketed by a short test.
+
+    The daily plan answers "what is worst today", which is right for one
+    session and wrong for a curriculum: a pillar can rank first on Monday, slip
+    to second on Tuesday from a single game, and never get the run of days it
+    takes to move. A cycle fixes the main pillar for ``CYCLE_DAYS`` and measures
+    the result. JSON columns: the two test sets (parallel forms matched on
+    rating, so the post-test is not the pre-test remembered), their answers,
+    the baseline taken at the start, and the final report.
+    """
+
+    __tablename__ = "focus_cycles"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    pillar: Mapped[str] = mapped_column(String(16))
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    ends_at: Mapped[datetime] = mapped_column(DateTime)
+    tests: Mapped[str] = mapped_column(Text, default="{}")
+    baseline: Mapped[str] = mapped_column(Text, default="{}")
+    report: Mapped[str | None] = mapped_column(Text, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+
+
 class WoodpeckerSet(Base):
     """A fixed set of puzzles solved in the same order, pass after pass.
 

@@ -232,8 +232,14 @@ def clamp_minutes(minutes: int | None) -> int:
     return max(MIN_SESSION_MINUTES, min(MAX_SESSION_MINUTES, m))
 
 
-def build_plan(account: str | None = None, minutes: int = DEFAULT_MINUTES) -> dict:
-    """The whole curriculum decision for one session, as plain data."""
+def build_plan(account: str | None = None, minutes: int = DEFAULT_MINUTES,
+               cycle: dict | None = None) -> dict:
+    """The whole curriculum decision for one session, as plain data.
+
+    ``cycle`` is the focus cycle in force (``cycles.state`` plus an optional
+    ``test_block``): it fixes the main pillar for its two weeks, and on its
+    first and last days the warm-up becomes the cycle's test.
+    """
     minutes = clamp_minutes(minutes)
     profile = latest_profile(account) or latest_profile(None)
     scale = minutes / DEFAULT_MINUTES
@@ -248,9 +254,10 @@ def build_plan(account: str | None = None, minutes: int = DEFAULT_MINUTES) -> di
     # at all is exactly the wrong outcome. Every SLOW_DAY_EVERY-th session the
     # game block trains the slow weakness instead, and the drill picks up the
     # fast one.
-    primary = ranked[0]
+    focus = (cycle or {}).get("pillar")
+    primary = focus or ranked[0]
     slow_day = rotation % SLOW_DAY_EVERY == SLOW_DAY_EVERY - 1
-    if slow_day:
+    if slow_day and primary not in _SLOW_PILLARS:
         slow = next((p for p in ranked if p in _SLOW_PILLARS), None)
         if slow:
             primary = slow
@@ -269,6 +276,9 @@ def build_plan(account: str | None = None, minutes: int = DEFAULT_MINUTES) -> di
 
     solve_s = _observed_solve_seconds()
     secondary = _second_focus(ranked, primary, game.time_control.speed)
+    if focus and primary != focus:
+        # A slow day moved the game off the cycle's pillar; the drill keeps it.
+        secondary = focus
     drill_kind, drill_detail, drill_sources = _DRILL_FOR.get(
         secondary, ("puzzles", "Mixed puzzles from your own games", ["own-game"])
     )
@@ -350,14 +360,20 @@ def build_plan(account: str | None = None, minutes: int = DEFAULT_MINUTES) -> di
         ),
     ]
 
+    test = (cycle or {}).get("test_block")
+    if test:
+        blocks[0] = Block(**{**test, "minutes": max(test["minutes"], mins["warmup"])})
+
     return {
+        "cycle": ({k: cycle.get(k) for k in ("id", "pillar", "label", "day", "days",
+                                            "pending_test")} if cycle else None),
         "minutes": sum(b.minutes for b in blocks),
         "focus_pillar": primary,
         "secondary_pillar": secondary,
         "time_control": game.time_control.key,
         "speed": game.time_control.speed,
         "blocks": [asdict(b) for b in blocks],
-        "notes": _notes(profile, primary, secondary, game),
+        "notes": _notes(profile, primary, secondary, game, cycle),
         "generated_at": datetime.now(UTC).isoformat(),
     }
 
@@ -394,8 +410,15 @@ def remember(profile: dict | None) -> str | None:
     return None
 
 
-def _notes(profile: dict | None, primary: str, secondary: str, game: GamePlan) -> list[str]:
+def _notes(profile: dict | None, primary: str, secondary: str, game: GamePlan,
+           cycle: dict | None = None) -> list[str]:
     notes: list[str] = []
+    if cycle:
+        notes.append(
+            f"Focus cycle: {cycle['label'].lower()}, day {cycle['day']} of {cycle['days']}. "
+            "The main pillar holds for the whole cycle so it gets a run of days; "
+            "a test at each end measures what changed."
+        )
     # Said first, because it qualifies everything after it. A plan built on a
     # library whose newest game is months old is still the best plan available,
     # but the app should not present it as a reading of how you are playing now.
@@ -502,7 +525,7 @@ def start_session(account: str | None = None, minutes: int = DEFAULT_MINUTES) ->
     if existing is not None:
         return as_dict(existing)
 
-    plan = build_plan(account, clamp_minutes(minutes))
+    plan = build_plan(account, clamp_minutes(minutes), cycle=_cycle_for_session(account))
     _bump_rotation()
     Session = session_factory()
     with Session() as s:
@@ -517,6 +540,42 @@ def start_session(account: str | None = None, minutes: int = DEFAULT_MINUTES) ->
         s.add(ts)
         s.commit()
         return as_dict(ts)
+
+
+def _cycle_for_session(account: str | None) -> dict | None:
+    """Close a cycle whose two weeks are up, start one if none is running, and
+    return it in the shape `build_plan` takes."""
+    from coach.session import cycles
+
+    profile = latest_profile(account) or latest_profile(None)
+    Session = session_factory()
+    with Session() as s:
+        cur = cycles.active(s, account)
+        if cur is not None and cycles.maybe_finish(s, cur) is not None:
+            s.commit()
+            cur = None
+        cur = cur or cycles.ensure(s, _ranked_pillars(profile) if profile else [], account)
+        if cur is None:
+            return None
+        st = cycles.state(cur)
+        if st["pending_test"]:
+            st["test_block"] = cycles.test_block(cur, st["pending_test"])
+        s.commit()
+        return st
+
+
+def cycle_preview(account: str | None) -> dict | None:
+    """The cycle a preview should show, without starting one."""
+    from coach.session import cycles
+
+    with session_factory()() as s:
+        cur = cycles.active(s, account)
+        if cur is None:
+            return None
+        st = cycles.state(cur)
+        if st["pending_test"]:
+            st["test_block"] = cycles.test_block(cur, st["pending_test"])
+        return st
 
 
 def as_dict(ts: TrainingSession) -> dict:

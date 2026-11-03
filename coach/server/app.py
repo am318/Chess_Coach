@@ -565,6 +565,40 @@ def api_sparring_status(account: str | None = None) -> JSONResponse:
     return JSONResponse(sparring_status(account))
 
 
+@app.get("/api/cycle")
+def api_cycle(account: str | None = None) -> JSONResponse:
+    from coach.session import cycles
+
+    with session_factory()() as session:
+        cur = cycles.active(session, account)
+        return JSONResponse({"active": cycles.state(cur) if cur else None,
+                             "history": cycles.history(account)})
+
+
+@app.post("/api/cycle/{cycle_id}/test")
+def api_cycle_test(
+    cycle_id: int,
+    phase: str = Body(),
+    puzzle_id: int = Body(),
+    solved: bool = Body(),
+    elapsed_ms: int | None = Body(default=None),
+) -> JSONResponse:
+    from coach.session import cycles
+    from coach.store.db import FocusCycle
+
+    with session_factory()() as session:
+        cyc = session.get(FocusCycle, cycle_id)
+        if cyc is None or phase not in ("pre", "post"):
+            raise HTTPException(404, "no such cycle test")
+        try:
+            st = cycles.answer(session, cyc, phase, puzzle_id, solved, elapsed_ms)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        report = cycles.maybe_finish(session, cyc) if phase == "post" else None
+        session.commit()
+        return JSONResponse({"cycle": st, "report": report})
+
+
 @app.get("/api/settings/training")
 def api_training_settings() -> JSONResponse:
     from coach.puzzles import candidates as cand
@@ -834,7 +868,8 @@ def api_session_today(account: str | None = None) -> JSONResponse:
     if existing is not None:
         return JSONResponse({"active": True, **sp.as_dict(existing)})
     # No session yet: show what today would look like without committing to it.
-    return JSONResponse({"active": False, "preview": sp.build_plan(account)})
+    return JSONResponse({"active": False,
+                         "preview": sp.build_plan(account, cycle=sp.cycle_preview(account))})
 
 
 @app.post("/api/session/start")
