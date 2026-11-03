@@ -558,6 +558,13 @@ def api_woodpecker_abandon(set_id: int) -> JSONResponse:
         return JSONResponse({"ok": True})
 
 
+@app.get("/api/sparring/status")
+def api_sparring_status(account: str | None = None) -> JSONResponse:
+    from coach.profile.rating import sparring_status
+
+    return JSONResponse(sparring_status(account))
+
+
 @app.get("/api/settings/training")
 def api_training_settings() -> JSONResponse:
     from coach.puzzles import candidates as cand
@@ -1276,14 +1283,16 @@ async def ws_play(ws: WebSocket) -> None:
             else 0.5 if result == "1/2-1/2" else 0.0
         )
         new_elo = None
+        elo_change = None
         if counts and auto_state.get("elo"):
             from coach.profile import rating
-            new_elo = rating.record_result(user_score, prof_acct)
+            elo_change = rating.record_result_detail(user_score, prof_acct)
+            new_elo = elo_change["after"]
         await send({
             "type": "gameover", "result": result, "reason": reason,
             "pgn": _game_pgn(board, start_fen),
             "game_id": gid, "review_pending": gid is not None,
-            "next_elo": new_elo, "counted": counts,
+            "next_elo": new_elo, "elo_change": elo_change, "counted": counts,
             "user_moves": user_plies,
         })
         if gid is not None:

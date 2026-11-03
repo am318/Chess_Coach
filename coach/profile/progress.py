@@ -190,7 +190,14 @@ def dashboard(account: str | None = None, db_path=None) -> dict:
         "candidates": _candidates(db_path),
         "calculation": _calculation(db_path),
         "transfer": _transfer(db_path),
+        "sparring_status": _sparring(account, db_path),
     }
+
+
+def _sparring(account=None, db_path=None) -> dict:
+    from coach.profile.rating import sparring_status
+
+    return sparring_status(account, db_path)
 
 
 def _transfer(db_path=None) -> dict:

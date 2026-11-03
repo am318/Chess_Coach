@@ -1555,7 +1555,11 @@ function playMsg(m) {
     rememberGameKey(null);
     const owns = ctxOwnsSession();
     let s = "Game over: " + m.result + " (" + m.reason + ")";
-    if (m.next_elo) s += "  ·  next game ~" + m.next_elo + " Elo";
+    if (m.next_elo) {
+      const ch = (m.elo_change || {}).change;
+      s += "  ·  next game ~" + m.next_elo + " Elo" +
+        (ch ? ` (${ch > 0 ? "+" : ""}${ch}, aiming for you to score ~45%)` : "");
+    }
     // A game abandoned after a move or two is deliberately not filed, rated or
     // analysed; say so rather than leaving the user to wonder where it went.
     if (m.counted === false) s += "  ·  too short to count — not saved or rated";
@@ -2242,6 +2246,18 @@ async function loadDashboard() {
   if (trends.series.length > 1) {
     body.insertAdjacentHTML("beforeend", "<p class='muted'>Pillar avg cp-loss over snapshots</p>");
     body.appendChild(multiLine(trends, "avg cp lost"));
+  }
+  const ss = d.sparring_status || {};
+  if (ss.games) {
+    let line = `Sparring bot: ~${ss.elo} Elo after ${ss.games} games, tuned for you to score ` +
+      `${Math.round(ss.target_score * 100)}%` +
+      (ss.recent_score != null ? ` — you've scored ${Math.round(ss.recent_score * 100)}% ` +
+        `over the last ${ss.recent_games}` : "") + ".";
+    if (ss.scale_offset != null && Math.abs(ss.scale_offset) >= 100) {
+      line += ` Its scale reads about ${Math.abs(ss.scale_offset)} points ` +
+        `${ss.scale_offset > 0 ? "low" : "high"} against your online ${ss.online_rating}.`;
+    }
+    body.insertAdjacentHTML("beforeend", `<p class='muted'>${esc(line)}</p>`);
   }
   const sp = (d.sparring_trend || { series: [] }).series;
   if (sp.length) {
