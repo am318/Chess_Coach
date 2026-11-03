@@ -486,7 +486,7 @@ async function nextTodayPuzzle() {
   $("tpMeta").textContent = tpPuz.kind === "line"
     ? `${tpDone + 1}/${tpTarget} · ${tpPuz.name || "your line"}`
     : `${tpDone + 1}/${tpTarget} · ${tpPuz.pillar}` +
-      `${tpPuz.motif ? " · " + tpPuz.motif : ""} · ~${tpPuz.rating} · you ${r.your_rating}`;
+      `${tpPuz.motif ? " · " + (tpPuz.motif_label || tpPuz.motif) : ""} · ~${tpPuz.rating} · you ${r.your_rating}`;
   stepTodayPuzzle(null);
 }
 
@@ -1236,7 +1236,7 @@ function renderReviewMoments(body, games) {
       const d = document.createElement("div");
       d.className = "moment";
       d.innerHTML = `<b>${m.move_number}${m.side === "white" ? "." : "…"} ${m.played_san}</b>` +
-        ` −${m.cp_loss}cp · ${m.pillar}${m.motif ? " · " + m.motif : ""}<br>` +
+        ` −${m.cp_loss}cp · ${m.pillar}${m.motif ? " · " + (m.motif_label || m.motif) : ""}<br>` +
         (m.best_san ? `better: <b>${m.best_san}</b> ${(m.best_line_san||[]).slice(1,4).join(" ")}<br>` : "") +
         refutationHTML(m) +
         (m.note ? `<span class="muted">${m.note}</span>` : "");
@@ -1561,7 +1561,7 @@ async function loadPuzzle() {
   puz = r.puzzle; userMoves = []; puzStart = Date.now(); puzPractice = false;
   $("puzzleMeta").textContent = puz.kind === "line"
     ? `${puz.name || "opening line"} · ${r.remaining} due`
-    : `${puz.pillar}${puz.motif ? " · " + puz.motif : ""} · ~${puz.rating} · ` +
+    : `${puz.pillar}${puz.motif ? " · " + (puz.motif_label || puz.motif) : ""} · ~${puz.rating} · ` +
       `you ${r.your_rating} · ${r.remaining} due` +
       (puz.kind === "punish" ? " · punish the mistake" : "");
   await stepPuzzle(null);
@@ -1952,7 +1952,7 @@ function renderReview(r) {
   for (const m of r.key_moments) {
     const d = document.createElement("div"); d.className = "moment";
     d.innerHTML = `<b>${m.move_number}${m.side === "white" ? "." : "…"} ${m.played_san}</b>` +
-      ` −${m.cp_loss}cp · ${m.pillar}${m.motif ? " · " + m.motif : ""}<br>` +
+      ` −${m.cp_loss}cp · ${m.pillar}${m.motif ? " · " + (m.motif_label || m.motif) : ""}<br>` +
       (m.best_san ? `better: ${m.best_san} (${m.best_line_san.join(" ")})<br>` : "") +
       refutationHTML(m) +
       (m.note ? `<span class="muted">${m.note}</span>` : "");
@@ -2053,7 +2053,7 @@ async function loadDashboard() {
       const dir = m.improvement > 0.3 ? "↓ less often"
                 : m.improvement < -0.3 ? "↑ more often" : "flat";
       el.innerHTML = `<i style="width:${(m.current / maxRate * 100).toFixed(0)}%"></i>` +
-        `<span>${m.motif} — ${m.current}/100 now vs ${m.rates[0]}/100 then · ${dir}</span>`;
+        `<span>${esc(m.label || m.motif)} — ${m.current}/100 now vs ${m.rates[0]}/100 then · ${dir}</span>`;
       rx.appendChild(el);
     }
     body.appendChild(rx);
@@ -2065,6 +2065,25 @@ async function loadDashboard() {
       }),
       pillars: rec.motifs.map((m) => m.motif),
     }, "per 100 decisions"));
+  }
+
+  // Per-motif puzzle ratings: one number per pattern, so "you find forks at
+  // 1700 and miss deflections at 1300" is visible rather than averaged away.
+  const mr = (d.motif_ratings || []).filter((m) => m.n >= 3);
+  if (mr.length) {
+    body.insertAdjacentHTML("beforeend",
+      "<p class='muted'>Puzzle rating by pattern — weakest first</p>");
+    const mx = document.createElement("div"); mx.className = "bars";
+    const top = Math.max(...mr.map((m) => m.rating), 1);
+    for (const m of mr.slice(0, 12)) {
+      const el = document.createElement("div"); el.className = "bar";
+      const rel = m.vs_overall >= 0 ? `+${m.vs_overall}` : `${m.vs_overall}`;
+      el.innerHTML = `<i style="width:${(m.rating / top * 100).toFixed(0)}%"></i>` +
+        `<span>${esc(m.label)} — ${m.rating} (${rel} vs overall, ${m.solved}/${m.n}` +
+        `${m.settled ? "" : ", still settling"})</span>`;
+      mx.appendChild(el);
+    }
+    body.appendChild(mx);
   }
 
   const trends = d.pillar_trends || { series: [], pillars: [] };

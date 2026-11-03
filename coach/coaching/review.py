@@ -12,6 +12,7 @@ import chess
 import chess.pgn
 from sqlalchemy.orm import Session
 
+from coach.analysis.motifs import label
 from coach.coaching.llm import Narrator, NullNarrator
 from coach.store.db import Game, session_factory
 
@@ -154,6 +155,7 @@ def _assemble(session: Session, game: Game, narrator: Narrator) -> dict:
             refutation_san=_refutation_san(m.fen_before, m.uci, m.refutation_line),
         )
         d = asdict(moment)
+        d["motif_label"] = ", ".join(label(t) for t in (m.motif or "").split(",") if t) or None
         d["note"] = narrator.explain(d)
         moments.append(d)
 

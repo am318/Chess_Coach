@@ -21,6 +21,7 @@ from sqlalchemy import select
 
 from coach.analysis.annotate import clamped_cp_loss
 from coach.analysis.classify import CLASSIFIER_VERSION, classify_move
+from coach.analysis.motifs import parse_line
 from coach.analysis.timing import compute_seconds_spent
 from coach.config import CoachConfig
 from coach.store.db import Game, Move, Puzzle, get_setting, session_factory, set_setting
@@ -96,7 +97,9 @@ def reclassify(db_path=None, batch: int = 2000, cfg: CoachConfig | None = None) 
                     except ValueError:
                         best = None
                 tags = classify_move(board, played, best, m.cp_loss,
-                                     m.eval_before_cp, m.second_best_cp, prof)
+                                     m.eval_before_cp, m.second_best_cp, prof,
+                                     best_line=parse_line(m.best_line),
+                                     refutation=parse_line(m.refutation_line))
                 motif = tags.motif or None
                 # `punish_miss` is added to the motif string by the analysis pass
                 # and is not re-derivable here, so carry it across rather than

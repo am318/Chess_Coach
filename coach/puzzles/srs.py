@@ -11,6 +11,7 @@ Grades (matching the UI): 1 = again (failed), 2 = hard, 3 = good, 4 = easy.
 
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -228,7 +229,92 @@ def update_puzzle_rating(session: Session, puzzle: Puzzle, solved: bool) -> int:
     new = cur + _RATING_K * ((1.0 if solved else 0.0) - expected)
     new = max(RATING_MIN, min(RATING_MAX, new))
     set_setting(session, _RATING_KEY, f"{new:.0f}")
+    update_motif_ratings(session, puzzle, solved, cur)
     return int(new)
+
+
+# Per-motif ability. One puzzle rating says how strong a solver you are; it
+# cannot say that you find forks at 1700 and miss deflections at 1300, which is
+# the thing a training queue most wants to know. Each motif carries its own Elo,
+# seeded at the overall rating when it is first seen and moved by the same
+# update, with a larger K while it has few results so it settles quickly.
+_MOTIF_KEY = "motif_ratings"
+_MOTIF_K_NEW, _MOTIF_K = 40, 20
+_MOTIF_SETTLED = 10
+# Motifs that describe the player's own move or the position rather than an
+# idea the solver has to find. A puzzle tagged "back rank is weak" is about the
+# board, not about a pattern being recognised.
+_UNRATED_MOTIFS = {"back-rank-weak", "missed-punish", "hangs-piece", "wins-exchange",
+                   "moved-pinned-piece", "allowed-mate"}
+
+
+def motif_ratings(session: Session) -> dict[str, dict]:
+    raw = get_setting(session, _MOTIF_KEY)
+    try:
+        data = json.loads(raw) if raw else {}
+    except ValueError:
+        data = {}
+    return data if isinstance(data, dict) else {}
+
+
+def puzzle_motifs(puzzle: Puzzle) -> list[str]:
+    return [m for m in (puzzle.motif or "").split(",") if m and m not in _UNRATED_MOTIFS]
+
+
+def update_motif_ratings(session: Session, puzzle: Puzzle, solved: bool,
+                         overall: int | None = None) -> dict[str, dict]:
+    tags = puzzle_motifs(puzzle)
+    if not tags:
+        return {}
+    data = motif_ratings(session)
+    base = overall if overall is not None else puzzle_rating(session)
+    for tag in tags:
+        row = data.get(tag) or {"r": float(base), "n": 0, "wins": 0}
+        cur = float(row.get("r", base))
+        opponent = puzzle.rating_est or cur
+        expected = 1.0 / (1.0 + 10 ** ((opponent - cur) / 400.0))
+        k = _MOTIF_K_NEW if row.get("n", 0) < _MOTIF_SETTLED else _MOTIF_K
+        row["r"] = round(max(RATING_MIN, min(RATING_MAX,
+                                             cur + k * ((1.0 if solved else 0.0) - expected))), 1)
+        row["n"] = int(row.get("n", 0)) + 1
+        row["wins"] = int(row.get("wins", 0)) + (1 if solved else 0)
+        data[tag] = row
+    set_setting(session, _MOTIF_KEY, json.dumps(data, sort_keys=True))
+    return data
+
+
+def motif_weights(session: Session) -> dict[str, float]:
+    """Queue weight per motif: the further a motif's rating sits below the
+    overall one, the more often its puzzles come up - up to 1.6x."""
+    data = motif_ratings(session)
+    if not data:
+        return {}
+    overall = puzzle_rating(session)
+    out: dict[str, float] = {}
+    for tag, row in data.items():
+        if row.get("n", 0) < 3:
+            continue
+        gap = overall - float(row.get("r", overall))
+        out[tag] = round(min(1.6, max(0.8, 1.0 + gap / 400.0)), 3)
+    return out
+
+
+def motif_summary(session: Session) -> list[dict]:
+    """Per-motif ratings for display, weakest first."""
+    from coach.analysis.motifs import label
+
+    overall = puzzle_rating(session)
+    rows = []
+    for tag, row in motif_ratings(session).items():
+        n = int(row.get("n", 0))
+        rows.append({
+            "motif": tag, "label": label(tag), "rating": round(float(row.get("r", overall))),
+            "n": n, "solved": int(row.get("wins", 0)),
+            "vs_overall": round(float(row.get("r", overall)) - overall),
+            "settled": n >= _MOTIF_SETTLED,
+        })
+    rows.sort(key=lambda r: r["vs_overall"])
+    return rows
 
 
 def ensure_card(session: Session, puzzle: Puzzle) -> SrsCard:
@@ -266,6 +352,7 @@ def due_queue(
     """
     now = now or _now()
     pillar_weights = pillar_weights or {}
+    motif_w = motif_weights(session)
     if target_rating is None:
         target_rating = selection_rating(session)
     room_for_new = new_cards_left(session, now)
@@ -316,7 +403,9 @@ def due_queue(
         fit = 1.0 / (1.0 + (gap / 250.0) ** 2)
         freshness = 1.25 if card.reps == 0 else 1.0
         urgency = 1.0 + min(overdue_days, 30.0) / 30.0
-        return pillar_w * fit * freshness * urgency
+        tags = puzzle_motifs(puzzle)
+        weak = max((motif_w.get(t, 1.0) for t in tags), default=1.0)
+        return pillar_w * fit * freshness * urgency * weak
 
     rows.sort(key=score, reverse=True)
     # Trim the unseen ones down to whatever is left of today's intake, keeping

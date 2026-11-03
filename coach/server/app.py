@@ -317,6 +317,13 @@ def api_puzzle_next(account: str | None = None, speed: str | None = None,
         })
 
 
+def _motif_label(motif: str | None) -> str | None:
+    from coach.analysis.motifs import label
+
+    tags = [t for t in (motif or "").split(",") if t]
+    return ", ".join(label(t) for t in tags) or None
+
+
 def _puzzle_json(p: Puzzle) -> dict:
     return {
         "id": p.id,
@@ -324,6 +331,7 @@ def _puzzle_json(p: Puzzle) -> dict:
         "opponent_first": bool(p.opponent_first) or p.source == "library",
         "pillar": p.pillar,
         "motif": p.motif,
+        "motif_label": _motif_label(p.motif),
         "kind": p.kind,
         "rating": p.rating_est,
         "source": p.source,

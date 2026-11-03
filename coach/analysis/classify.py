@@ -10,13 +10,14 @@ from dataclasses import dataclass
 
 import chess
 
+from coach.analysis.motifs import detect_motifs
 from coach.config import ProfileCfg
 
 # Bumped whenever the tag set or the pillar routing changes, so `repair.py` knows
 # to walk the stored positions again instead of leaving rows classified by rules
 # that no longer exist. v2: pillar routed by error type before phase, plus
-# `decision_w`.
-CLASSIFIER_VERSION = 3
+# `decision_w`. v4: the thirty-motif taxonomy in `motifs.py`, read off the PV.
+CLASSIFIER_VERSION = 4
 
 _PIECE_VAL = {chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3, chess.ROOK: 5, chess.QUEEN: 9}
 
@@ -206,74 +207,6 @@ def error_bucket(cp_loss: int | None, cfg: ProfileCfg) -> str:
     return "ok"
 
 
-def detect_motifs(board: chess.Board, played: chess.Move, best: chess.Move | None) -> list[str]:
-    """Lightweight motif hints for a position where the user went wrong.
-
-    Heuristic, not a solver: flags the tactic the user most likely missed or
-    walked into, based on the position before their move and the engine's best
-    reply.
-    """
-    motifs: list[str] = []
-    stm = board.turn
-
-    # Hanging piece: after the played move, does the opponent have a capture that
-    # wins material by SEE-ish (attacker cheaper than victim, victim undefended)?
-    test = board.copy(stack=False)
-    test.push(played)
-    for mv in test.legal_moves:
-        if not test.is_capture(mv):
-            continue
-        victim = test.piece_type_at(mv.to_square)
-        if victim is None:
-            continue
-        attackers = test.attackers(test.turn, mv.to_square)
-        defenders = test.attackers(not test.turn, mv.to_square)
-        if victim >= chess.KNIGHT and len(defenders) == 0:
-            motifs.append("hangs-piece")
-            break
-        if victim >= chess.ROOK and len(attackers) > len(defenders):
-            motifs.append("wins-exchange")
-            break
-
-    # Fork: the engine's best move attacks >=2 valuable pieces at once.
-    if best is not None:
-        after_best = board.copy(stack=False)
-        after_best.push(best)
-        moved_to = best.to_square
-        piece = after_best.piece_type_at(moved_to)
-        if piece:
-            targets = 0
-            for tsq in after_best.attacks(moved_to):
-                tp = after_best.piece_type_at(tsq)
-                if tp and after_best.color_at(tsq) != stm and tp >= chess.KNIGHT:
-                    targets += 1
-            if targets >= 2:
-                motifs.append("fork")
-            if piece == chess.PAWN and targets >= 2:
-                motifs.append("pawn-fork")
-
-    # Back-rank: king on the back rank boxed in by its own pawns.
-    king_sq = board.king(stm)
-    if king_sq is not None:
-        back = 0 if stm == chess.WHITE else 7
-        if chess.square_rank(king_sq) == back:
-            fwd = 8 if stm == chess.WHITE else -8
-            boxed = all(
-                (0 <= king_sq + fwd + d < 64)
-                and board.piece_type_at(king_sq + fwd + d) == chess.PAWN
-                and board.color_at(king_sq + fwd + d) == stm
-                for d in (-1, 0, 1)
-                if 0 <= chess.square_file(king_sq) + d <= 7
-            )
-            if boxed:
-                motifs.append("back-rank-weak")
-
-    if board.is_pinned(stm, played.from_square):
-        motifs.append("moved-pinned-piece")
-
-    return list(dict.fromkeys(motifs))
-
-
 def classify_move(
     board: chess.Board,
     played: chess.Move,
@@ -282,12 +215,14 @@ def classify_move(
     best_cp: int | None,
     second_cp: int | None,
     cfg: ProfileCfg,
+    best_line: list[chess.Move] | None = None,
+    refutation: list[chess.Move] | None = None,
 ) -> MoveTags:
     phase = game_phase(board)
     f = forcingness(board, best_cp, second_cp)
     bucket = error_bucket(cp_loss, cfg)
     eg = endgame_type(board)
-    motifs = detect_motifs(board, played, best) if bucket in ("mistake", "blunder") else []
+    motifs = detect_motifs(board, played, best, best_line, refutation) if bucket in ("mistake", "blunder") else []
 
     # Pillar routing, decided by what the POSITION was, before what the phase was.
     #

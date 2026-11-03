@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from coach.analysis.motifs import label
 from coach.analysis.timing import (
     CONSIDERED_SECONDS,
     RUSHED_SECONDS,
@@ -636,7 +637,7 @@ def render_text(profile: dict) -> str:
     if profile["tactics_motifs"]:
         lines += ["", "Recurring tactical motifs:"]
         for mt in profile["tactics_motifs"]:
-            lines.append(f"  - {mt['key']:<22} {mt['n']}x, -{mt['total_cp_cost']}cp total")
+            lines.append(f"  - {label(mt['key']):<34} {mt['n']}x, -{mt['total_cp_cost']}cp total")
     if profile["endgames"]:
         lines += ["", "Endgames by damage:"]
         for eg in profile["endgames"]:

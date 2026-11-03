@@ -164,7 +164,8 @@ def analyse_game(engine: chess.engine.SimpleEngine, session: Session, game: Game
         if m.is_user_move:
             m.refutation_line = " ".join(x.uci() for x in refutation[:10]) or None
             tags = classify_move(
-                board, played, best_move, cp_loss, best_white, second_white, cfg.profile
+                board, played, best_move, cp_loss, best_white, second_white, cfg.profile,
+                best_line=list(lines[0]["pv"]), refutation=list(refutation),
             )
             m.forcingness = tags.forcingness
             m.phase = tags.phase

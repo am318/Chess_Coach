@@ -22,6 +22,7 @@ from itertools import pairwise
 
 from sqlalchemy import select
 
+from coach.analysis.motifs import label
 from coach.profile.weakness_model import EVIDENCE_SOURCES_EXCLUDED, PILLARS
 from coach.store.db import Game, Move, ProfileSnapshot, session_factory
 
@@ -123,6 +124,7 @@ def motif_recurrence(account: str | None = None, db_path=None, months: int = 12)
         rates = [round(100.0 * counts[mt].get(k, 0) / denom[k], 2) for k in keys]
         series.append({
             "motif": mt,
+            "label": label(mt),
             "rates": rates,
             "total": totals[mt],
             # Positive = happening less often now than at the start of the window.
@@ -184,4 +186,15 @@ def dashboard(account: str | None = None, db_path=None) -> dict:
         "pillar_trends": pillar_trends(account, db_path),
         "sparring_trend": sparring_trend(account, db_path),
         "motif_recurrence": motif_recurrence(account, db_path),
+        "motif_ratings": _motif_ratings(db_path),
     }
+
+
+def _motif_ratings(db_path=None) -> list[dict]:
+    from coach.puzzles.srs import motif_summary
+
+    Session = session_factory(db_path)
+    with Session() as session:
+        rows = motif_summary(session)
+        session.commit()   # puzzle_rating() may have seeded itself
+    return rows

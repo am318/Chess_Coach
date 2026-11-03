@@ -15,6 +15,7 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
+from coach.analysis.motifs import from_lichess_themes
 from coach.puzzles.srs import ensure_card
 from coach.store.db import Puzzle, session_factory
 
@@ -81,7 +82,10 @@ def import_lichess_csv(
                 fen=fen,
                 solution=moves,           # already space-sep UCI; first move is opponent's
                 pillar=pillar,
-                motif=themes[:64] or None,
+                # Our own tag vocabulary, so a library fork and a fork mined
+                # from the player's games count as the same pattern.
+                motif=",".join(from_lichess_themes(themes)[:6]) or None,
+                opponent_first=True,
                 rating_est=rating,
             )
             session.add(puzzle)
