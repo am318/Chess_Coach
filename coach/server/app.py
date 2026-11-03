@@ -100,6 +100,11 @@ def _run_refresh(cfg: CoachConfig) -> None:
             from coach.drills.seed import seed_all
 
             seed_all(account=None)
+            # Optional: score new mistakes with Maia, so the profile can tell
+            # typical-at-your-level from your own. A no-op without lc0.
+            from coach.analysis.human import tag_mistakes
+
+            _REFRESH.update(maia_tagged=tag_mistakes(limit=300))
             build_profile(account=None)
             if not cfg.unified_identity:
                 for u in cfg.all_users:
@@ -1302,6 +1307,15 @@ async def ws_play(ws: WebSocket) -> None:
     await ws.accept()
     board = chess.Board()
     opp = SparringOpponent()
+    # Maia is optional: with lc0 and the weights installed (and traps enabled),
+    # the bot sets the traps a player at your level actually falls into.
+    try:
+        from coach.analysis.human import shared as _maia
+
+        if _cfg().maia.sparring_traps:
+            opp.predictor = _maia()
+    except Exception:  # noqa: BLE001 - optional
+        opp.predictor = None
     you = "white"
     elo = 1500
     account = "me"

@@ -1295,14 +1295,21 @@ async function startReviewBlock(block) {
 /* "Better: Nf3" tells you what to memorise. The line after the move you played
  * tells you why - so both go on every key moment. */
 function refutationHTML(m) {
+  const human = m.human_kind === "typical"
+    ? `<span class="muted">A common mistake at your level — about ${Math.round(m.human_p * 100)}% of ` +
+      `players there play it.</span><br>`
+    : m.human_kind === "personal"
+      ? `<span class="muted">Unusual at your level: under ${Math.max(1, Math.round(m.human_p * 100))}% ` +
+        `of players there would play this. Worth drilling — it's yours.</span><br>`
+      : "";
   const line = m.refutation_san || [];
   const st = m.structure
     ? `<span class="muted">${esc(m.structure.name)} — as ${esc(m.structure.role)}: </span>` +
       `${esc(m.structure.plan)}<br>`
     : "";
-  if (!line.length) return st;
+  if (!line.length) return st + human;
   return `<span class="muted">yours ran into</span> ` +
-         line.map((san, i) => (i % 2 === 0 ? `<b>${san}</b>` : san)).join(" ") + `<br>` + st;
+         line.map((san, i) => (i % 2 === 0 ? `<b>${san}</b>` : san)).join(" ") + `<br>` + st + human;
 }
 
 function renderReviewMoments(body, games) {
@@ -2268,6 +2275,13 @@ async function loadDashboard() {
       `<p class='muted'>Cycle on <b>${esc(r.label || h.label)}</b> ` +
       `(${(r.started || "").slice(0, 10)} – ${(r.ended || "").slice(0, 10)}): ` +
       esc((r.summary || []).join(" ")) + "</p>");
+  }
+  const hu = prof.human || {};
+  if (hu.typical_share != null) {
+    body.insertAdjacentHTML("beforeend",
+      `<p class='muted'>Of ${hu.tagged} mistakes scored by Maia: ` +
+      `${Math.round(hu.typical_share * 100)}% are common at your level, ` +
+      `${Math.round(hu.personal_share * 100)}% are your own — the ones worth drilling first.</p>`);
   }
   const ss = d.sparring_status || {};
   if (ss.games) {

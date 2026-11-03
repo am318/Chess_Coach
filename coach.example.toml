@@ -59,3 +59,15 @@ blunder_cp = 250
 # A position counts as "quiet / no obvious move" when its forcing-ness score is
 # below this (0 = dead quiet, 1 = highly forcing).
 quiet_forcingness_max = 0.25
+
+[maia]
+# Optional. Maia predicts the move a human at a given rating plays, through lc0.
+# It tells "a mistake many players at your level make" from "one that's yours",
+# and lets the sparring bot set the traps your level falls into. Without lc0 and
+# the weights everything else works unchanged.
+#   brew install lc0
+#   weights: https://github.com/CSSLab/maia-chess/tree/master/maia_weights
+#   (maia-1100.pb.gz ... maia-1900.pb.gz)
+lc0_path = "lc0"
+weights_dir = "~/.maia"
+sparring_traps = true

@@ -158,6 +158,11 @@ def _assemble(session: Session, game: Game, narrator: Narrator) -> dict:
         d = asdict(moment)
         d["motif_label"] = ", ".join(label(t) for t in (m.motif or "").split(",") if t) or None
         d["structure"] = _structure_note(m.fen_before, game.color)
+        if m.human_p is not None:
+            from coach.analysis.human import classify
+
+            d["human_p"] = m.human_p
+            d["human_kind"] = classify(m.human_p)
         d["note"] = narrator.explain(d)
         moments.append(d)
 

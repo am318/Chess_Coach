@@ -57,6 +57,15 @@ class StartupCfg:
 
 
 @dataclass
+class MaiaCfg:
+    """Optional: Maia human-move prediction through lc0 (see analysis/human.py)."""
+    lc0_path: str = "lc0"
+    weights_dir: str = "~/.maia"
+    # Let the sparring bot prefer moves whose most likely human reply is a mistake.
+    sparring_traps: bool = True
+
+
+@dataclass
 class CoachConfig:
     lichess_users: list[str] = field(default_factory=list)
     chesscom_users: list[str] = field(default_factory=list)
@@ -71,6 +80,7 @@ class CoachConfig:
     engine: EngineCfg = field(default_factory=EngineCfg)
     profile: ProfileCfg = field(default_factory=ProfileCfg)
     startup: StartupCfg = field(default_factory=StartupCfg)
+    maia: MaiaCfg = field(default_factory=MaiaCfg)
 
     @property
     def all_users(self) -> list[str]:
@@ -96,6 +106,7 @@ class CoachConfig:
         eng = data.get("engine", {})
         prof = data.get("profile", {})
         start = data.get("startup", {})
+        maia = data.get("maia", {})
         return cls(
             lichess_users=list(acc.get("lichess", [])),
             chesscom_users=list(acc.get("chesscom", [])),
@@ -108,4 +119,5 @@ class CoachConfig:
             engine=EngineCfg(**{k: eng[k] for k in eng if k in EngineCfg.__annotations__}),
             profile=ProfileCfg(**{k: prof[k] for k in prof if k in ProfileCfg.__annotations__}),
             startup=StartupCfg(**{k: start[k] for k in start if k in StartupCfg.__annotations__}),
+            maia=MaiaCfg(**{k: maia[k] for k in maia if k in MaiaCfg.__annotations__}),
         )

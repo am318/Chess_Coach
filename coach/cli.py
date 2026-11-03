@@ -156,6 +156,21 @@ def _cmd_review(args) -> None:
     print(f"\nFocus next: {r['focus_pillar']}")
 
 
+def _cmd_maia(args) -> None:
+    from coach.analysis import human
+
+    pred = human.shared()
+    if pred is None:
+        print("Maia is not set up: needs lc0 on PATH and maia-*.pb.gz weights "
+              "(see [maia] in coach.example.toml).")
+        return
+    if args.action == "status":
+        print(f"Maia ready: {pred.lc0_path}, weights in {pred.weights_dir}")
+        return
+    n = human.tag_mistakes(predictor=pred, limit=args.limit)
+    print(f"tagged {n} mistakes with how likely a player at your level was to make them")
+
+
 def _cmd_puzzles(args) -> None:
     if args.action == "mine":
         from coach.puzzles.miner import mine_all
@@ -279,6 +294,11 @@ def main(argv: list[str] | None = None) -> None:
     p_dr.add_argument("action", nargs="?", default="list", choices=["list", "refresh"])
     p_dr.add_argument("--account", default=None)
     p_dr.set_defaults(func=_cmd_drills)
+
+    p_mx = sub.add_parser("maia", help="optional human-move model via lc0: status | tag")
+    p_mx.add_argument("action", choices=["status", "tag"])
+    p_mx.add_argument("--limit", type=int, default=2000)
+    p_mx.set_defaults(func=_cmd_maia)
 
     p_srv = sub.add_parser("serve")
     p_srv.add_argument("--host", default="0.0.0.0")

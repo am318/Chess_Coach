@@ -421,6 +421,34 @@ def _time_allocation(rows: list[_Row]) -> dict:
     return out
 
 
+def _human_split(session: Session, account: str | None) -> dict:
+    """Of the mistakes Maia has scored: how many are typical of the player's
+    level, and how many are their own. Empty when Maia isn't set up."""
+    from coach.analysis.human import PERSONAL_P, TYPICAL_P
+
+    q = (select(Move.human_p, Move.pillar).join(Game, Move.game_id == Game.id)
+         .where(Move.is_user_move.is_(True), Move.human_p.isnot(None),
+                Game.source.notin_(EVIDENCE_SOURCES_EXCLUDED)))
+    if account:
+        q = q.where(Game.account == account)
+    rows = session.execute(q).all()
+    if len(rows) < 20:
+        return {"tagged": len(rows)}
+    typical = sum(1 for p, _ in rows if p >= TYPICAL_P)
+    personal = sum(1 for p, _ in rows if p <= PERSONAL_P)
+    by_pillar: dict[str, list[float]] = defaultdict(list)
+    for p, pil in rows:
+        by_pillar[pil or "positional"].append(p)
+    return {
+        "tagged": len(rows),
+        "typical_share": round(typical / len(rows), 3),
+        "personal_share": round(personal / len(rows), 3),
+        "personal_by_pillar": {
+            k: round(sum(1 for p in v if p <= PERSONAL_P) / len(v), 3)
+            for k, v in by_pillar.items() if len(v) >= 8},
+    }
+
+
 def _blunder_cp() -> int:
     """The configured blunder threshold, or the default when there is no config."""
     try:
@@ -599,6 +627,7 @@ def _build(session: Session, account: str | None) -> dict:
         },
         "time_allocation": _time_allocation(rows),
         "game_state": _game_state(rows, summ),
+        "human": _human_split(session, account),
     }
 
     profile["repertoire"] = _repertoire(session, account)

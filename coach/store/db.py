@@ -115,6 +115,10 @@ class Move(Base):
     # contributes a cp_loss of 0 that dilutes every average it lands in; this
     # weight lets the profile average over decisions rather than over moves.
     decision_w: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Maia (optional): how likely a human at the player's rating was to play
+    # this move, and the move such a player would most likely have chosen.
+    human_p: Mapped[float | None] = mapped_column(Float, nullable=True)
+    human_top: Mapped[str | None] = mapped_column(String(6), nullable=True)
 
     game: Mapped[Game] = relationship(back_populates="moves")
 
